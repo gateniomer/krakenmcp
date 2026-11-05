@@ -1,0 +1,3 @@
+#!/bin/sh
+# POSIX entry for the test stub; the logic is in stub.mjs (opencode.cmd is the Windows entry).
+exec "${STUB_NODE:-node}" "$(dirname "$0")/stub.mjs" "$@"
