@@ -157,6 +157,19 @@ export const recentMessages = (runId, limit = 5) =>
   db.prepare('SELECT sender, kind, body, created_at FROM messages WHERE run_id = ? ORDER BY id DESC LIMIT ?')
     .all(runId, limit).reverse();
 
+export const messagesSince = (runId, since = 0, limit = 200) =>
+  db.prepare('SELECT id, run_id, sender, kind, body FROM messages WHERE run_id = ? AND id > ? ORDER BY id LIMIT ?')
+    .all(runId, since, limit);
+export const pipelineMessagesSince = (pid, since = 0, limit = 200) =>
+  db.prepare(`SELECT m.id, m.run_id, m.sender, m.kind, m.body FROM messages m JOIN runs r ON r.id = m.run_id
+              WHERE r.pipeline_id = ? AND m.id > ? ORDER BY m.id LIMIT ?`).all(pid, since, limit);
+export const lastMessageId = (runId) =>
+  db.prepare('SELECT MAX(id) AS id FROM messages WHERE run_id = ?').get(runId)?.id ?? 0;
+export const lastPipelineMessageId = (pid) =>
+  db.prepare('SELECT MAX(m.id) AS id FROM messages m JOIN runs r ON r.id = m.run_id WHERE r.pipeline_id = ?').get(pid)?.id ?? 0;
+export const pipelineRuns = (pid) =>
+  db.prepare('SELECT id, tentacle, resumed_from FROM runs WHERE pipeline_id = ? ORDER BY created_at, rowid').all(pid);
+
 export const listRuns = (session, limit = 20) =>
   db.prepare(`SELECT id, tentacle, access, plan_id, agent, model, effort, status, outcome, verdict, duration_ms, cost_usd,
                 substr(task,1,80) AS task, created_at, finished_at

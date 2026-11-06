@@ -39,6 +39,12 @@ if (write && env.STUB_RESOLVE && unmerged.length) {
   appendFileSync(f, `export const v = "${n}-${resumed ? 'yes' : 'no'}";\n`);
   emit({ type: 'tool_use', part: { tool: 'write', state: { status: 'completed' } } });
 }
+for (let i = 1; i <= Number(env.STUB_LINES || 0); i++) { // feed tests: tool events between text events
+  emit({ type: 'tool_use', part: { tool: 'write', state: { status: 'completed' } } });
+  emit({ type: 'tool_use', part: { tool: 'write', state: { status: 'completed' } } });
+  emit({ type: 'text', part: { text: `line ${i}` } });
+}
+if (env.STUB_LONG) emit({ type: 'text', part: { text: `long ${'x'.repeat(250)}` } });
 let text;
 if (prompt.includes('REVIEWER')) text = `VERDICT: ${env.STUB_VERDICT || 'approve'}\nFindings: ${env.STUB_VERDICT === 'changes_requested' ? '[major] math.js:1 - x - y' : 'none'}`;
 else if (env.STUB_QUESTION && !resumed) text = 'Need a decision.\nKRAKEN_QUESTION: Keep it in a separate file?';

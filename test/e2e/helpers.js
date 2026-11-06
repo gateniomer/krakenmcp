@@ -27,7 +27,7 @@ export function setup() {
     GIT_AUTHOR_NAME: 'kraken-test', GIT_AUTHOR_EMAIL: 'test@example.com',
     GIT_COMMITTER_NAME: 'kraken-test', GIT_COMMITTER_EMAIL: 'test@example.com',
   };
-  for (const k of ['STUB_SLEEP', 'STUB_EXIT', 'STUB_QUESTION', 'STUB_FILE', 'STUB_COST', 'STUB_VERDICT', 'STUB_RESOLVE', 'STUB_PROVIDER_ERROR', 'KRAKEN_MAX_PARALLEL']) delete env[k];
+  for (const k of ['STUB_SLEEP', 'STUB_EXIT', 'STUB_QUESTION', 'STUB_FILE', 'STUB_COST', 'STUB_VERDICT', 'STUB_RESOLVE', 'STUB_PROVIDER_ERROR', 'STUB_LINES', 'STUB_LONG', 'KRAKEN_MAX_PARALLEL']) delete env[k];
 
   const git = (...a) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8', env }).trim();
   execFileSync('git', ['init', '-q', '-b', 'main', repo], { env });

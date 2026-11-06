@@ -8,19 +8,21 @@ import { createServer } from './mcp.js';
 import { str, num, int, bool, oneOf, list, obj } from './schema.js';
 import { resolve } from 'node:path';
 import { agentInfo, checkAgents, AGENTS } from './agents.js';
-import { IN_PROGRESS, getRun, getPipeline, recentMessages, VERSION } from './store.js';
+import { IN_PROGRESS, getRun, getPipeline, lastMessageId, lastPipelineMessageId, VERSION } from './store.js';
 import { cancelRun, resumeRun } from './control.js';
 import { mergeRun, discardRun, syncBranch } from './branches.js';
 import { pump, maxParallel } from './scheduler.js';
 import { approvalMode } from './branches.js';
-import { startPipeline, cancelPipeline, describePipeline, isPipelineId, pipelineStatus } from './pipeline.js';
+import { startPipeline, cancelPipeline, describePipeline, isPipelineId, pipelineStatus, pipelineFeed } from './pipeline.js';
 import { resolveTentacle, knownNames, userDir, userTentacles } from './tentacles.js';
-import { startRun, describe, sessionSummary, clip, agentReport } from './runs.js';
+import { startRun, describe, sessionSummary, clip, agentReport, runFeed, runLabel } from './runs.js';
 
 const INSTRUCTIONS = `Kraken delegates work to other headless coding agents. Each action is a "tentacle"; you are the head
 (the agent the developer talks to) that sends work to them.
-Runs are asynchronous: every start tool returns a run_id at once; then call status(run_id, wait_seconds: 50)
-until the status is no longer queued/running. Do not poll faster.
+Runs are asynchronous: every start tool returns a run_id at once. Then call status(run_id, wait_seconds: 50, since: 0),
+and on each later call pass the cursor it returned as since. While the run is in progress, show the developer the
+returned feed lines as they are (in a code block, one per line, nothing added) before the next status call. When
+status is "waiting", ask the developer the question and resume. Do not poll faster.
 
 Feature flow:
 1. Discuss the feature with the developer yourself; you are the one who advises them.
@@ -125,8 +127,9 @@ server.tool('status', {
   description: 'A run\'s or pipeline\'s status, progress, metrics and result. Blocks up to wait_seconds while it is ' +
     'in progress (sends progress notifications when the client asks for them).',
   input: { run_id: str({ required: true, description: 'Run id or pipeline id' }),
-    wait_seconds: num({ min: 0, max: 55, default: 0 }), full: bool({ default: false, description: 'Full result instead of an excerpt' }) },
-}, async ({ run_id, wait_seconds, full }, { progress }) => {
+    wait_seconds: num({ min: 0, max: 55, default: 0 }), full: bool({ default: false, description: 'Full result instead of an excerpt' }),
+    since: int({ min: 0, description: 'Cursor from the previous status: returns only newer progress lines as feed' }) },
+}, async ({ run_id, wait_seconds, full, since }, { progress }) => {
   pump(); // also recovers runs whose worker died, and starts queued runs if there is room
   const pipe = isPipelineId(run_id);
   const load = () => (pipe ? getPipeline(run_id) : getRun(run_id));
@@ -139,22 +142,34 @@ server.tool('status', {
     await sleep(1000);
     item = load();
     if (progress) {
-      const note = progressNote(pipe ? item.current_run : run_id, pipe ? item.stage : null);
+      const note = progressNote(pipe ? item.current_run : run_id, pipe ? item.stage : null, pipe ? run_id : null);
       if (note !== lastNote || (Date.now() - started) % 10_000 < 1000) {
         lastNote = note;
         progress(Math.round((Date.now() - started) / 1000), note);
       }
     }
   }
-  return text(pipe ? describePipeline(item, full) : describe(item, full));
+  if (since === undefined) return text(pipe ? describePipeline(item, full) : describe(item, full));
+  const live = pipe ? pipelineFeed(item, since) : runFeed(item, since);
+  if (busy(item)) { // compact reply: only what the head shows to the developer
+    const cur = pipe ? (item.current_run && getRun(item.current_run)) : item;
+    const t0 = item.started_at ?? item.created_at;
+    return text({ id: item.id, status: pipe ? pipelineStatus(item) : item.status, stage: pipe ? item.stage : undefined,
+      elapsed_s: t0 ? Math.round((Date.now() - new Date(t0.includes('T') ? t0 : `${t0.replace(' ', 'T')}Z`)) / 1000) : undefined,
+      cost_usd: cur?.cost_usd ?? undefined, feed: live.feed, cursor: live.cursor,
+      next: `show the feed lines to the developer as they are, then call status again with since: ${live.cursor}` });
+  }
+  return text(pipe ? describePipeline(item, full, live) : { ...describe(item, full), ...live });
 });
 
-// Latest progress line of a run, for progress notifications.
-function progressNote(runId, stage) {
+// Latest feed line of a run or pipeline, for progress notifications.
+function progressNote(runId, stage, pipelineId) {
   if (!runId) return stage ?? 'starting';
-  const m = recentMessages(runId, 1)[0];
   const run = getRun(runId);
-  return `${stage ? `${stage}: ` : ''}${run?.status ?? ''}${m ? ` - ${m.body.slice(0, 160)}` : ''}`;
+  const live = pipelineId
+    ? pipelineFeed(getPipeline(pipelineId), Math.max(0, lastPipelineMessageId(pipelineId) - 1))
+    : runFeed(run, Math.max(0, lastMessageId(runId) - 1));
+  return live.feed.at(-1)?.trim() ?? `${runLabel(run)}: ${run?.status ?? 'running'}`;
 }
 
 server.tool('resume', {
