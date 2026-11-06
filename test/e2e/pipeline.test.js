@@ -123,6 +123,7 @@ test('pipeline: cancel stops the current step; a dead driver is marked failed', 
   const dead = await slow.call('status', { run_id: p2.pipeline_id });
   assert.equal(dead.status, 'failed');
   assert.match(dead.error, /driver exited unexpectedly/);
+  assert.match(dead.next, /report this error to the developer/);
   if (dead.runs.plan) await slow.call('cancel', { run_id: dead.runs.plan });
   await slow.close();
 });
@@ -135,6 +136,7 @@ test('max_cost_usd and max_tokens stop a run as over_budget while it is running'
   assert.deepEqual(r.limits, { max_cost_usd: 0.5 });
   const s = await pricey.wait(r.run_id);
   assert.equal(s.status, 'over_budget');
+  assert.match(s.next, /report this error to the developer/);
   assert.match(s.stopped, /passed max_cost_usd \$0\.5/);
   assert.ok(Date.now() - started < 15_000, 'stopped long before the agent would have finished');
   assert.ok(s.metrics.cost_usd >= 1);
@@ -143,6 +145,7 @@ test('max_cost_usd and max_tokens stop a run as over_budget while it is running'
   const cheap = await h.client({ STUB_COST: '0.0001', STUB_SLEEP: '20' });
   const t = await cheap.wait((await cheap.call('explain', { area: 'wordy', cwd: h.repo })).run_id);
   assert.equal(t.status, 'over_budget');
+  assert.match(t.next, /report this error to the developer/);
   assert.match(t.stopped, /tokens passed max_tokens 500/);
   h.tentacle('explain', null);
   assert.equal((await k.call('session', {})).groups.find((g) => g.group.startsWith('explain')).failed, 2);

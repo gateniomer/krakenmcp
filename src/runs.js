@@ -44,6 +44,11 @@ export function metrics(run) {
   };
 }
 
+// A run that ended badly must not be retried silently on another agent or model.
+export const STOP_NEXT = 'stop: report this error to the developer and ask how to proceed; ' +
+  'do not retry or switch agent/model on your own';
+const STOP = ['failed', 'timeout', 'over_budget'];
+
 export function describe(run, full = false) {
   const resultFile = join(PLANS_DIR, `${run.id}.md`);
   return {
@@ -52,7 +57,8 @@ export function describe(run, full = false) {
     agent: run.agent, model: run.model, effort: run.effort,
     task: clip(run.task, 200), plan_id: run.plan_id ?? undefined,
     question: run.status === 'waiting' ? run.question : undefined,
-    next: run.status === 'waiting' ? `ask the developer, then resume("${run.id}", their reply)` : undefined,
+    next: run.status === 'waiting' ? `ask the developer, then resume("${run.id}", their reply)`
+      : STOP.includes(run.status) ? STOP_NEXT : undefined,
     outcome: run.outcome ? `${run.outcome}: ${run.outcome_detail}` : undefined,
     verdict: run.verdict ?? undefined, target_run: run.target_run ?? undefined,
     resumed_from: run.resumed_from ?? undefined,

@@ -2,6 +2,7 @@
 description: Implement a finished plan (writes code on its own branch, in a git worktree).
 access: write
 agent: opencode
+model: opencode-go/deepseek-v4.1-flash
 timeout_min: 30
 ---
 You are the EXECUTOR. Implement the plan below.

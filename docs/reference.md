@@ -76,6 +76,9 @@ Pipelines are `running`, `waiting`, `done`, `failed` or `cancelled`.
 
 While `status` waits it sends MCP progress notifications if the client passes a progress token.
 
+A `failed`, `timeout` or `over_budget` run, or a `failed` pipeline, returns a `next` that tells the head
+to stop: it reports the error to the developer and does not retry on another agent or model on its own.
+
 ### Live feed
 
 `status` takes `since`, a cursor (a message id; start with `0`). It returns:
@@ -153,14 +156,16 @@ One file per agent in [`src/agents/`](../src/agents); the contract is at the top
 
 | Agent | Status | Read mode | Write mode | Effort | Resume |
 |---|---|---|---|---|---|
-| opencode | tested (v2.2.5) | `run --agent plan` | `run --auto` | `-m provider/model#<effort>` | `--session <id>` |
+| opencode | tested (v2.2.5) | `run --standalone --agent plan` | `run --standalone --auto` | `-m provider/model#<effort>` | `--session <id>` |
 | claude | tested | `-p --permission-mode plan` | `--permission-mode acceptEdits` | `--effort <level>` | `--resume <id>` |
 | codex | untested | `exec --sandbox read-only` | `--sandbox workspace-write` | `-c model_reasoning_effort=…` | `exec … resume <id>` |
 | cursor | untested | `-p --mode ask --trust` | `-p --force --trust` | not supported | `--resume <chatId>` |
 | aider | untested | `--message … --chat-mode ask` | `--message … --yes-always --no-auto-commits` | `--reasoning-effort` | `--restore-chat-history` |
 
-Not yet confirmed for Codex: whether `exec` options must come before `resume` (Kraken puts them
-first). Claude Code runs with `--output-format stream-json --verbose`, so tool calls are counted and
+OpenCode runs use `--standalone`, so each run gets a private server and never depends on, or collides
+with, the developer's background `opencode serve --service`. Not yet confirmed for Codex: whether
+`exec` options must come before `resume` (Kraken puts them first). Claude Code runs with
+`--output-format stream-json --verbose`, so tool calls are counted and
 usage is read while it runs. Codex reports no cost; Cursor reports no token counts or cost. Aider
 prints plain text: Kraken reads tokens and cost from its `Tokens: … Cost: …` lines, keeps its chat
 history in `~/.kraken/logs` (outside the worktree) and never commits `.aider*` files. Gemini CLI is

@@ -14,6 +14,7 @@ test('server exposes the documented tools and instructions', async () => {
   assert.deepEqual(tools, ['cancel', 'discard', 'execute', 'explain', 'merge',
     'pipeline', 'plan', 'resume', 'review', 'run', 'session', 'status', 'tentacles', 'think', 'update']);
   assert.match(k.c.getInstructions(), /only after\s+they explicitly approve/);
+  assert.match(k.c.getInstructions(), /do not retry it and do not switch agent, model or effort/);
   const info = k.c.getServerVersion();
   assert.equal(info.name, 'kraken');
 });
@@ -85,6 +86,8 @@ test('an agent that exits non-zero ends as failed with its stderr', async () => 
   const r = await bad.wait((await bad.call('explain', { area: 'x', cwd: h.repo })).run_id);
   assert.equal(r.status, 'failed');
   assert.match(r.error, /exit 3: stub failure/);
+  assert.match(r.next, /report this error to the developer/);
+  assert.match(r.next, /do not retry or switch agent\/model/);
   await bad.close();
 });
 
@@ -102,6 +105,7 @@ test('a run over its timeout is stopped and ends as timeout', async () => {
   const started = Date.now();
   const r = await slow.wait((await slow.call('run', { tentacle: 'slowpoke', input: 'x', cwd: h.repo })).run_id);
   assert.equal(r.status, 'timeout');
+  assert.match(r.next, /report this error to the developer/);
   assert.ok(Date.now() - started < 10_000, 'stopped well before the agent would have finished');
   await slow.close();
 });

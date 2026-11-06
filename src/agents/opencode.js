@@ -8,7 +8,9 @@ export default {
   effortNote: 'appended as model#variant (e.g. "high" -> provider/model#high); needs an explicit model',
   reports: { cost: true, tokens: true, tool_calls: true },
   build(kind, { prompt, model, effort, resumeSession }) {
-    const args = ['run', '--format', 'json'];
+    // --standalone gives each run a private server, so it never depends on (or collides with)
+    // the developer's background `opencode serve --service`.
+    const args = ['run', '--standalone', '--format', 'json'];
     if (model) args.push('-m', effort ? `${model}#${effort}` : model);
     if (resumeSession) args.push('--session', resumeSession); // verified flag: continue a session
     if (kind === 'plan') args.push('--agent', 'plan'); // built-in read-only agent

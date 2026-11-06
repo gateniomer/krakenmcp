@@ -45,6 +45,9 @@ into the run's branch and, on conflicts, resumes the agent to resolve them.
 
 If status is "waiting", the agent asked a question only the developer can answer: ask them, then call
 resume(run_id, their reply). A run stopped as "over_budget" hit its max_cost_usd / max_tokens.
+Failures stop you: if a tool returns an error, or a run ends as "failed", "timeout" or "over_budget",
+do not retry it and do not switch agent, model or effort on your own. Report the error to the developer
+immediately and ask how to proceed. A "verify_failed" run keeps its commit; report the verify output.
 Use explain(area) instead of reading many files yourself.
 For questions that need current information from the web (APIs, versions, library choices), call
 run(tentacle: "research", input: question) instead of answering from memory.

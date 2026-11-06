@@ -13,7 +13,7 @@ import { newId, nowIso, getRun, insertPipeline, getPipeline, updatePipeline, res
 import { startNode } from './scheduler.js';
 import { cancelRun, resumeRun } from './control.js';
 import { mergeRun, approvalMode } from './branches.js';
-import { startRun, describe, runLabel, renderFeed } from './runs.js';
+import { startRun, describe, runLabel, renderFeed, STOP_NEXT } from './runs.js';
 
 export const isPipelineId = (id) => typeof id === 'string' && id.startsWith('pipe_');
 
@@ -94,9 +94,11 @@ export function describePipeline(p, full = false, live) {
     error: p.error ?? undefined,
     ...live,
     next: waiting ? `ask the developer, then resume("${cur.id}", their reply); the pipeline continues by itself`
-      : p.status === 'done' && p.exec_run && !getRun(p.exec_run)?.outcome
-        ? `show merge("${p.exec_run}") to the developer; merge only after they approve`
-        : undefined,
+      : p.status === 'failed'
+        ? STOP_NEXT
+        : p.status === 'done' && p.exec_run && !getRun(p.exec_run)?.outcome
+          ? `show merge("${p.exec_run}") to the developer; merge only after they approve`
+          : undefined,
   };
 }
 

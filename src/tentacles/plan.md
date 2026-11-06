@@ -3,6 +3,7 @@ description: Write an implementation plan for a task (read-only).
 access: read
 agent: claude
 model: opus
+effort: medium
 timeout_min: 20
 ---
 You are the PLANNER.
