@@ -46,7 +46,9 @@ test('an agent question pauses the run; resume answers it with the developer\'s 
   assert.deepEqual((await asker.call('session', {})).attention.waiting, [q.id]);
   assert.equal(commitsOn(h, q.branch), 0, 'nothing is committed while waiting');
 
-  const done = await asker.wait((await asker.call('resume', { run_id: q.id, input: 'Yes, a separate file' })).run_id);
+  const resumed = await asker.call('resume', { run_id: q.id, input: 'Yes, a separate file' });
+  assert.match(resumed.next, /since 0/, 'answering keeps the live feed going');
+  const done = await asker.wait(resumed.run_id);
   assert.equal(done.status, 'done');
   assert.ok(h.argsLog().at(-1).includes('ANSWER: Yes, a separate file'));
   assert.equal((await asker.call('status', { run_id: q.id })).status, 'answered');

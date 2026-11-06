@@ -163,6 +163,25 @@ export const messagesSince = (runId, since = 0, limit = 200) =>
 export const pipelineMessagesSince = (pid, since = 0, limit = 200) =>
   db.prepare(`SELECT m.id, m.run_id, m.sender, m.kind, m.body FROM messages m JOIN runs r ON r.id = m.run_id
               WHERE r.pipeline_id = ? AND m.id > ? ORDER BY m.id LIMIT ?`).all(pid, since, limit);
+// Read every row after `since` (page by page), for the final reply: nothing may be dropped.
+export const messagesSinceAll = (runId, since = 0) => {
+  const out = [];
+  for (let after = since;;) {
+    const rows = messagesSince(runId, after);
+    out.push(...rows);
+    if (rows.length < 200) return out;
+    after = rows.at(-1).id;
+  }
+};
+export const pipelineMessagesSinceAll = (pid, since = 0) => {
+  const out = [];
+  for (let after = since;;) {
+    const rows = pipelineMessagesSince(pid, after);
+    out.push(...rows);
+    if (rows.length < 200) return out;
+    after = rows.at(-1).id;
+  }
+};
 export const lastMessageId = (runId) =>
   db.prepare('SELECT MAX(id) AS id FROM messages WHERE run_id = ?').get(runId)?.id ?? 0;
 export const lastPipelineMessageId = (pid) =>

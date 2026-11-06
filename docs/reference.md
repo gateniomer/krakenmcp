@@ -94,7 +94,8 @@ to stop: it reports the error to the developer and does not retry on another age
 While the run or pipeline is in progress and `since` is given, the reply is compact: `id`, `status`,
 `stage` (pipelines), `elapsed_s`, `cost_usd`, `feed`, `cursor`, `next`. Once it ends (or is `waiting` on a
 question) the reply is the full one plus the last `feed` and `cursor`. Without `since` the reply is
-unchanged apart from `cursor`. Codex runs only show lifecycle lines.
+unchanged apart from `cursor`; run and pipeline replies both carry one, so following can start at any
+time. Codex runs only show lifecycle lines.
 
 ## Tentacle fields and settings layers
 

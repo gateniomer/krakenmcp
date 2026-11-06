@@ -84,6 +84,43 @@ test('feed: a question shows in the feed and the run is waiting', async () => {
   const s = (await follow(c, run_id)).at(-1);
   assert.equal(s.status, 'waiting');
   assert.ok(s.feed.some((l) => l.endsWith('QUESTION: Keep it in a separate file?')), s.feed.join('\n'));
+  const resumed = await c.call('resume', { run_id, input: 'Yes, a separate file' });
+  await c.wait(resumed.run_id);
+  const answered = await c.call('status', { run_id, since: 0 });
+  assert.ok(answered.feed.some((l) => l.startsWith('developer: ANSWER: Yes, a separate file')),
+    answered.feed.join('\n'));
+  await c.close();
+});
+
+test('feed: agent text that starts with started/resumed stays quoted and complete', async () => {
+  const c = await h.client({ STUB_TEXT: 'started looking at the parser' });
+  const lines = allLines(await follow(c, (await c.call('explain', { area: 'text', cwd: h.repo })).run_id));
+  assert.ok(lines.some((l) => l.endsWith('"started looking at the parser"')), lines.join('\n'));
+  await c.close();
+});
+
+test('feed: the final reply reads past one 200-row page so nothing is dropped', async () => {
+  const c = await h.client({ STUB_LINES: '80' }); // 3 messages per line = 240 rows, plus start and done
+  const { run_id } = await c.call('explain', { area: 'manyrows', cwd: h.repo });
+  await c.wait(run_id);
+  const s = await c.call('status', { run_id, since: 0 });
+  assert.match(s.feed[0], /^\(\+\d+ earlier lines/);
+  assert.match(s.feed.at(-1), /: done in [\d.]+s$/);
+  const max = h.db().prepare('SELECT MAX(id) AS id FROM messages WHERE run_id = ?').get(run_id).id;
+  assert.equal(s.cursor, max);
+  await c.close();
+});
+
+test('feed: a running pipeline can be followed with since and progress notifications', async () => {
+  const c = await h.client({ STUB_SLEEP: '4' });
+  const { pipeline_id } = await c.call('pipeline', { task: 'follow running', cwd: h.repo });
+  const s = await c.call('status', { run_id: pipeline_id, wait_seconds: 5, since: 0 });
+  assert.equal(s.status, 'running');
+  assert.ok(s.cursor > 0, 'the running pipeline returns a cursor');
+  assert.ok(Array.isArray(s.feed), 'a running pipeline returns a feed');
+  const { notes } = await c.callProgress('status', { run_id: pipeline_id, wait_seconds: 3, since: s.cursor });
+  assert.ok(notes.length > 0, 'progress notifications fire while waiting');
+  await c.wait(pipeline_id);
   await c.close();
 });
 
@@ -94,5 +131,7 @@ test('feed: a pipeline labels lines with their stage and uses one cursor', async
   for (const stage of ['plan', 'execute', 'review']) {
     assert.ok(lines.some((l) => l.startsWith(`${stage} › ${stage} tentacle (`)), `${stage} in:\n${lines.join('\n')}`);
   }
+  const plain = await c.call('status', { run_id: pipeline_id });
+  assert.ok(plain.cursor > 0, 'a pipeline reply without since still carries a cursor');
   await c.close();
 });

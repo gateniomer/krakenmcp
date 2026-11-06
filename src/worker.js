@@ -47,7 +47,7 @@ const child = spawn(agent.path, args, { cwd: run.workdir, stdio: ['ignore', 'pip
   env: { ...process.env, KRAKEN_PARENT_RUN: runId }, detached: true });
 child.on('error', (e) => failEarly(`could not start ${run.agent}: ${e.message}`));
 updateRun(runId, { status: 'running', pid: process.pid, agent_pid: child.pid ?? null, started_at: nowIso() });
-say('progress', `${resumeSession ? 'resumed' : 'started'} ${run.tentacle}: ${run.agent} ${run.model ?? '(default)'}${run.effort ? `#${run.effort}` : ''}`, run.agent);
+say('progress', `${resumeSession ? 'resumed' : 'started'} ${run.tentacle}: ${run.agent} ${run.model ?? '(default)'}${run.effort ? `#${run.effort}` : ''}`);
 
 let stdout = '', buf = '';
 child.stdout.on('data', (d) => {

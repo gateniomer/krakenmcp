@@ -5,6 +5,7 @@
 //   STUB_COST=x       report cost x in a step_finish right away (before sleeping), for budget tests
 //   STUB_VERDICT=v    review verdict (default approve)           STUB_RESOLVE=1 strip conflict markers in a write run
 //   STUB_ARGS_LOG=f   append each invocation's KRAKEN_PARENT_RUN and argv (one line) to f
+//   STUB_TEXT=s       emit s as an extra text event (for feed rendering tests)
 import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
@@ -45,6 +46,7 @@ for (let i = 1; i <= Number(env.STUB_LINES || 0); i++) { // feed tests: tool eve
   emit({ type: 'text', part: { text: `line ${i}` } });
 }
 if (env.STUB_LONG) emit({ type: 'text', part: { text: `long ${'x'.repeat(250)}` } });
+if (env.STUB_TEXT) emit({ type: 'text', part: { text: env.STUB_TEXT } });
 let text;
 if (prompt.includes('REVIEWER')) text = `VERDICT: ${env.STUB_VERDICT || 'approve'}\nFindings: ${env.STUB_VERDICT === 'changes_requested' ? '[major] math.js:1 - x - y' : 'none'}`;
 else if (env.STUB_QUESTION && !resumed) text = 'Need a decision.\nKRAKEN_QUESTION: Keep it in a separate file?';

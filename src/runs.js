@@ -4,8 +4,8 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { resolveAgent, AGENTS } from './agents.js';
 import {
-  PLANS_DIR, LOGS_DIR, WORKTREES_DIR, IN_PROGRESS, newId, insertRun, getRun, recentMessages, messagesSince, lastMessageId, allRuns, latestReview,
-  listRuns, listPipelines, db,
+  PLANS_DIR, LOGS_DIR, WORKTREES_DIR, IN_PROGRESS, newId, insertRun, getRun, recentMessages, messagesSince,
+  messagesSinceAll, lastMessageId, allRuns, latestReview, listRuns, listPipelines, db,
 } from './store.js';
 import { pump, queueInfo } from './scheduler.js';
 import { reviewInput, gitIn } from './branches.js';
@@ -111,9 +111,11 @@ export function renderFeed(rows, labelOf, showId = '<id>') {
       lines[group.index] = group.attach ? `  · tools: ${list}` : `${label} · tools: ${list}`;
     } else {
       group = null;
-      const lifecycle = m.kind === 'progress' && /^(started|resumed) [a-z][\w-]*: /.exec(m.body);
-      if (lifecycle) lines.push(`${label}: ${lifecycle[1]}`);
-      else if (m.kind === 'progress' && m.sender !== 'kraken') lines.push(`${label}: "${squash(m.body)}"`);
+      const fromKraken = m.sender === 'kraken';
+      const lifecycle = fromKraken && m.kind === 'progress' && /^(started|resumed)\b/.exec(m.body);
+      if (m.kind === 'answer') lines.push(`developer: ANSWER: ${squash(m.body, 400)}`);
+      else if (lifecycle) lines.push(`${label}: ${lifecycle[0]}`);
+      else if (m.kind === 'progress' && !fromKraken) lines.push(`${label}: "${squash(m.body)}"`);
       else if (m.kind === 'question') lines.push(`${label}: QUESTION: ${squash(m.body, 400)}`);
       else lines.push(`${label}: ${squash(m.body)}`);
     }
@@ -123,8 +125,8 @@ export function renderFeed(rows, labelOf, showId = '<id>') {
   return [`(+${lines.length - FEED_MAX_LINES} earlier lines; full log: krakenmcp show ${showId})`, ...lines.slice(-FEED_MAX_LINES)];
 }
 
-export function runFeed(run, since = 0) {
-  const rows = messagesSince(run.id, since);
+export function runFeed(run, since = 0, all = false) {
+  const rows = all ? messagesSinceAll(run.id, since) : messagesSince(run.id, since);
   const label = runLabel(run);
   return { feed: renderFeed(rows, () => label, run.id), cursor: rows.length ? rows.at(-1).id : Math.max(since, lastMessageId(run.id)) };
 }

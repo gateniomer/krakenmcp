@@ -74,7 +74,7 @@ export function resumeRun(id, input, { session, answering = false, syncBase, mer
   return {
     run_id: newRunId, resumes: id, queue: queueInfo(newRunId), tentacle: prev.tentacle, status: 'queued', agent: prev.agent, model: prev.model,
     workdir: prev.workdir, branch: prev.branch ?? undefined,
-    next: `call status with run_id "${newRunId}" and wait_seconds 50`,
+    next: `call status with run_id "${newRunId}", wait_seconds 50 and since 0`,
   };
 }
 

@@ -153,7 +153,7 @@ server.tool('status', {
     }
   }
   if (since === undefined) return text(pipe ? describePipeline(item, full) : describe(item, full));
-  const live = pipe ? pipelineFeed(item, since) : runFeed(item, since);
+  const live = pipe ? pipelineFeed(item, since, !busy(item)) : runFeed(item, since, !busy(item));
   if (busy(item)) { // compact reply: only what the head shows to the developer
     const cur = pipe ? (item.current_run && getRun(item.current_run)) : item;
     const t0 = item.started_at ?? item.created_at;

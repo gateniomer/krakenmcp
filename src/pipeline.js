@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { newId, nowIso, getRun, insertPipeline, getPipeline, updatePipeline, resumedBy, IN_PROGRESS,
-  pipelineMessagesSince, lastPipelineMessageId, pipelineRuns } from './store.js';
+  pipelineMessagesSince, pipelineMessagesSinceAll, lastPipelineMessageId, pipelineRuns } from './store.js';
 import { startNode } from './scheduler.js';
 import { cancelRun, resumeRun } from './control.js';
 import { mergeRun, approvalMode } from './branches.js';
@@ -67,8 +67,8 @@ function stageNames(pid) {
 }
 
 // Feed lines for every run of a pipeline, one cursor for all of them.
-export function pipelineFeed(p, since = 0) {
-  const rows = pipelineMessagesSince(p.id, since);
+export function pipelineFeed(p, since = 0, all = false) {
+  const rows = all ? pipelineMessagesSinceAll(p.id, since) : pipelineMessagesSince(p.id, since, 200);
   const names = stageNames(p.id), runs = new Map();
   const labelOf = (rid) => {
     if (!runs.has(rid)) { const run = getRun(rid); runs.set(rid, run ? runLabel(run, names.get(rid)) : 'run'); }
@@ -93,6 +93,7 @@ export function describePipeline(p, full = false, live) {
     result: p.result ? JSON.parse(p.result) : undefined,
     error: p.error ?? undefined,
     ...live,
+    cursor: live?.cursor ?? lastPipelineMessageId(p.id),
     next: waiting ? `ask the developer, then resume("${cur.id}", their reply); the pipeline continues by itself`
       : p.status === 'failed'
         ? STOP_NEXT

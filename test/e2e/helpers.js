@@ -27,7 +27,7 @@ export function setup() {
     GIT_AUTHOR_NAME: 'kraken-test', GIT_AUTHOR_EMAIL: 'test@example.com',
     GIT_COMMITTER_NAME: 'kraken-test', GIT_COMMITTER_EMAIL: 'test@example.com',
   };
-  for (const k of ['STUB_SLEEP', 'STUB_EXIT', 'STUB_QUESTION', 'STUB_FILE', 'STUB_COST', 'STUB_VERDICT', 'STUB_RESOLVE', 'STUB_PROVIDER_ERROR', 'STUB_LINES', 'STUB_LONG', 'KRAKEN_MAX_PARALLEL']) delete env[k];
+  for (const k of ['STUB_SLEEP', 'STUB_EXIT', 'STUB_QUESTION', 'STUB_FILE', 'STUB_COST', 'STUB_VERDICT', 'STUB_RESOLVE', 'STUB_PROVIDER_ERROR', 'STUB_LINES', 'STUB_LONG', 'STUB_TEXT', 'KRAKEN_MAX_PARALLEL']) delete env[k];
 
   const git = (...a) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8', env }).trim();
   execFileSync('git', ['init', '-q', '-b', 'main', repo], { env });
@@ -72,13 +72,20 @@ export function setup() {
         if (r.isError) throw new Error(`${tool}: ${r.text}`);
         return JSON.parse(r.text);
       };
+      // Same as call(), but with a progress token: returns the result and every progress notification.
+      const callProgress = async (tool, args = {}) => {
+        const notes = [];
+        const r = await c.callTool({ name: tool, arguments: args }, undefined, { onprogress: (n) => notes.push(n) });
+        if (r.isError) throw new Error(`${tool}: ${r.content[0].text}`);
+        return { result: JSON.parse(r.content[0].text), notes };
+      };
       const wait = async (id) => {
         for (;;) {
           const s = await call('status', { run_id: id, wait_seconds: 20 });
           if (!['queued', 'running'].includes(s.status)) return s;
         }
       };
-      return { c, raw, call, wait, close: () => c.close() };
+      return { c, raw, call, callProgress, wait, close: () => c.close() };
     },
     async cleanup() {
       for (const c of h.clients) await c.close().catch(() => {});
