@@ -6,17 +6,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-06
+
 ### Added
 - `status` takes `since` and returns `feed` (ready-made progress lines for the head to show the developer)
-  and `cursor`. While a run is in progress and `since` is given, the reply is compact.
+  and `cursor`. While a run is in progress and `since` is given, the reply is compact. Pipeline replies
+  also carry a `cursor`, and the developer's answers show as `developer: ANSWER:` in the feed.
+- The head can now show the tentacle's progress in its own chat while it waits, using the `feed` lines,
+  and keep following after answering a question.
 
 ### Changed
 - A failed, timed-out or over-budget run (or a failed pipeline) returns `next` telling the head to stop
   and report the error, and the server instructions forbid retrying on another agent or model on its own.
+- Default models and efforts for the built-in tentacles: `execute` and `explain` use
+  `opencode-go/deepseek-v4.1-flash`; `plan` and `research` use `medium` effort; `think` and `review`
+  use `medium` instead of `high`.
 
 ### Fixed
 - OpenCode runs use `--standalone`, so they no longer fail when the developer's background
   `opencode serve --service` holds the managed service port.
+- The final `status` reply reads every progress row, so the `done`/verdict line is not dropped after a
+  chatty run, and agent text starting with `started`/`resumed` is no longer mistaken for a lifecycle line.
 
 ## [1.0.0] - 2026-11-06
 
