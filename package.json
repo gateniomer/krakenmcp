@@ -1,7 +1,7 @@
 {
   "name": "krakenmcp",
   "version": "0.5.0",
-  "description": "MCP server that lets your coding agent delegate think / plan / execute / review work to other headless coding agents (Claude Code, Codex, Cursor, opencode, Aider).",
+  "description": "MCP server that lets your coding agent delegate think / plan / execute / review work to other headless coding agents (Claude Code, Codex, Cursor, OpenCode, Aider).",
   "keywords": [
     "mcp",
     "model-context-protocol",
@@ -15,6 +15,8 @@
     "orchestration"
   ],
   "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/gateniomer/kraken.git" },
+  "homepage": "https://github.com/gateniomer/kraken#readme",
   "type": "module",
   "bin": {
     "krakenmcp": "src/bin.js"
@@ -32,23 +34,16 @@
   },
   "os": [
     "darwin",
-    "linux",
-    "win32"
+    "linux"
   ],
   "scripts": {
     "start": "node src/bin.js",
-    "about": "node src/bin.js about",
-    "config": "node src/cli.js",
     "test": "node --test --test-concurrency=1 \"test/unit/*.test.js\" \"test/e2e/*.test.js\"",
     "test:unit": "node --test \"test/unit/*.test.js\"",
     "test:e2e": "node --test --test-concurrency=1 \"test/e2e/*.test.js\"",
     "test:coverage": "node --test --test-concurrency=1 --experimental-test-coverage --test-coverage-include=\"src/**\" --test-coverage-lines=90 --test-coverage-branches=80 --test-coverage-functions=90 \"test/unit/*.test.js\" \"test/e2e/*.test.js\"",
     "test:smoke": "node test/smoke/real-agent.js",
-    "prepublishOnly": "npm test",
     "test:smoke:pipeline": "node test/smoke/real-pipeline.js"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2"

@@ -4,12 +4,12 @@
 //
 // Kraken drives the steps (pipeline-driver.js, a detached process like the worker), so agents
 // still never delegate to agents. A question from any step pauses the pipeline as "waiting"; the
-// coordinator answers that run as usual and the pipeline follows the answered run.
+// head answers that run as usual and the pipeline follows the answered run.
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { newId, nowIso, getRun, insertPipeline, getPipeline, updatePipeline, resumedBy, IN_PROGRESS } from './store.js';
-import { startNode, checkBudget } from './scheduler.js';
+import { startNode } from './scheduler.js';
 import { cancelRun, resumeRun } from './control.js';
 import { mergeRun, approvalMode } from './branches.js';
 import { startRun, describe } from './runs.js';
@@ -17,7 +17,6 @@ import { startRun, describe } from './runs.js';
 export const isPipelineId = (id) => typeof id === 'string' && id.startsWith('pipe_');
 
 export function startPipeline({ task, cwd, session = 'default', verify, max_fix_rounds = 1, context_runs = [], overrides = {} }) {
-  checkBudget();
   const dir = resolve(cwd ?? process.cwd());
   if (!existsSync(dir)) throw new Error(`cwd does not exist: ${dir}`);
   try { execFileSync('git', ['-C', dir, 'rev-parse', '--is-inside-work-tree'], { stdio: 'ignore' }); }

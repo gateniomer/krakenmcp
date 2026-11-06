@@ -1,4 +1,4 @@
-// End to end: the feature flow and how runs end (done, verify_failed, failed, timeout, in place).
+// End to end: the feature flow and how runs end (done, verify_failed, failed, timeout).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -9,14 +9,13 @@ let h, k;
 before(async () => { h = setup(); k = await h.client({ STUB_FILE: 'feature.js' }); });
 after(() => h.cleanup());
 
-test('server exposes the documented tools, instructions and icons', async () => {
+test('server exposes the documented tools and instructions', async () => {
   const tools = (await k.c.listTools()).tools.map((t) => t.name).sort();
   assert.deepEqual(tools, ['cancel', 'discard', 'execute', 'explain', 'merge',
     'pipeline', 'plan', 'resume', 'review', 'run', 'session', 'status', 'tentacles', 'think', 'update']);
   assert.match(k.c.getInstructions(), /only after\s+they explicitly approve/);
   const info = k.c.getServerVersion();
   assert.equal(info.name, 'kraken');
-  assert.deepEqual(info.icons.map((i) => i.mimeType), ['image/png', 'image/svg+xml']);
 });
 
 let planRun, execRun;
@@ -98,24 +97,13 @@ test('an agent error reported on stdout (e.g. provider unreachable) becomes the 
 });
 
 test('a run over its timeout is stopped and ends as timeout', async () => {
-  h.cli('set', 'slowpoke', 'prompt=Look at {{task}}', 'timeout_min=0.01');
+  h.tentacle('slowpoke', { timeout_min: 0.01, prompt: 'Look at {{task}}' });
   const slow = await h.client({ STUB_SLEEP: '20' });
   const started = Date.now();
   const r = await slow.wait((await slow.call('run', { tentacle: 'slowpoke', input: 'x', cwd: h.repo })).run_id);
   assert.equal(r.status, 'timeout');
   assert.ok(Date.now() - started < 10_000, 'stopped well before the agent would have finished');
   await slow.close();
-});
-
-test('isolation none edits the checkout in place; merge and discard refuse such runs', async () => {
-  const r = await k.wait((await k.call('execute', { plan_id: planRun.id, isolation: 'none' })).run_id);
-  assert.equal(r.status, 'done');
-  assert.equal(r.branch, undefined);
-  assert.equal(r.workdir, h.repo);
-  assert.deepEqual(r.metrics.diff, { files: 1, insertions: 1, deletions: 0, untracked_files: 0 }, 'edited the tracked feature.js');
-  assert.match((await k.raw('merge', { run_id: r.id })).text, /in place/);
-  assert.match((await k.raw('discard', { run_id: r.id })).text, /in place/);
-  h.git('checkout', '-q', '.'); h.git('clean', '-qfd');
 });
 
 test('explain is read-only and runs in place without a branch', async () => {
@@ -129,13 +117,11 @@ test('explain is read-only and runs in place without a branch', async () => {
 test('session totals and history reflect the outcomes above', async () => {
   const s = await k.call('session', {});
   const g = (prefix) => s.groups.find((x) => x.group.startsWith(prefix));
-  assert.equal(g('execute').runs, 3);
-  assert.equal(g('execute').merged, 1);
-  assert.equal(g('execute').discarded, 1);
-  assert.equal(g('execute').verify_failed, 1);
+  assert.equal(g('execute').runs, 2);
+  assert.equal(g('execute').failed, 1, 'verify_failed counts as failed');
   assert.equal(g('explain').failed, 2, 'stderr failure + provider error');
-  assert.equal(g('slowpoke').timeout, 1);
-  assert.ok(s.total.tokens.cache_read > 0);
+  assert.equal(g('slowpoke').failed, 1, 'timeout counts as failed');
+  assert.ok(s.total.tokens.input > 0);
   assert.equal(s.runs.length, s.total.runs);
   assert.deepEqual(s.attention, { in_progress: [], waiting: [], ready_to_merge: [] }, 'everything above was merged or discarded');
 });

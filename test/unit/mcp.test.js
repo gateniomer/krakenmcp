@@ -18,11 +18,11 @@ test('initialize negotiates the protocol version and reports capabilities, info 
   const { call } = harness();
   const r = (await call('initialize', { protocolVersion: '2025-06-18', clientInfo: { name: 'c' } })).result;
   assert.equal(r.protocolVersion, '2025-06-18');
-  assert.deepEqual(r.capabilities, { tools: {}, resources: { subscribe: true }, logging: {} });
+  assert.deepEqual(r.capabilities, { tools: {} });
   assert.equal(r.instructions, 'hi');
   assert.equal((await call('initialize', { protocolVersion: '1999-01-01' })).result.protocolVersion, PROTOCOL_VERSIONS[0]);
   const off = harness({ tools: false });
-  assert.deepEqual((await off.call('initialize', {})).result.capabilities, { logging: {} });
+  assert.deepEqual((await off.call('initialize', {})).result.capabilities, {});
   assert.equal((await off.call('tools/list')).error.code, -32601, 'a tool-less server has no tools methods');
 });
 
@@ -42,30 +42,11 @@ test('tools: list, validated call, tool errors as isError, unknown tools and met
   assert.deepEqual((await call('ping')).result, {});
 });
 
-test('progress goes to the caller\'s token; logs respect logging/setLevel; resources match their template', async () => {
+test('progress goes to the caller\'s token', async () => {
   const { server, sent, call } = harness();
   server.tool('slow', { description: '', input: {} }, (_, { progress }) => { progress?.(1, 'half'); return { content: [] }; });
   await call('tools/call', { name: 'slow', arguments: {}, _meta: { progressToken: 'tok' } });
   assert.deepEqual(sent.find((m) => m.method === 'notifications/progress').params, { progressToken: 'tok', progress: 1, message: 'half' });
-
-  server.log('debug', 'k', 'hidden');
-  server.log('info', 'k', 'shown');
-  assert.deepEqual(sent.filter((m) => m.method === 'notifications/message').map((m) => m.params.data), ['shown']);
-  assert.equal((await call('logging/setLevel', { level: 'loud' })).error.code, -32602);
-
-  server.resourceTemplate({ uriTemplate: 'k://run/{id}', name: 'run', match: /^k:\/\/run\/(?<id>\w+)$/,
-    read: (uri, { id }) => { if (id === 'missing') throw new Error('no run'); return { uri, text: id }; } });
-  assert.deepEqual((await call('resources/templates/list')).result.resourceTemplates, [{ uriTemplate: 'k://run/{id}', name: 'run' }]);
-  assert.equal((await call('resources/read', { uri: 'k://run/abc' })).result.contents[0].text, 'abc');
-  assert.match((await call('resources/read', { uri: 'k://run/missing' })).error.message, /no run/);
-  assert.match((await call('resources/read', { uri: 'k://other' })).error.message, /unknown resource/);
-  let seen;
-  server.onSubscribe = (u) => { seen = u; };
-  await call('resources/subscribe', { uri: 'k://run/abc' });
-  assert.equal(seen, 'k://run/abc');
-  assert.ok(server.isSubscribed('k://run/abc'));
-  await call('resources/unsubscribe', { uri: 'k://run/abc' });
-  assert.ok(!server.isSubscribed('k://run/abc'));
 });
 
 test('notifications and stray responses get no reply; malformed requests get invalid request', async () => {

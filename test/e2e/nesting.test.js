@@ -46,11 +46,11 @@ test('tentacles(check_agents) and doctor report installed agents, versions and t
   assert.deepEqual(rep.agents.map((a) => a.name), ['opencode', 'claude', 'codex', 'cursor', 'aider']);
   const oc = rep.agents.find((a) => a.name === 'opencode');
   assert.equal(oc.version, 'opencode stub 0.0.0');
-  assert.deepEqual(oc.used_by.sort(), ['execute', 'explain', 'plan', 'review', 'think']);
+  assert.deepEqual(oc.used_by.sort(), ['execute', 'explain', 'plan', 'research', 'review', 'think']);
   assert.equal(rep.agent_problems, undefined);
 
   // With only the stub and system tools on PATH, a tentacle on codex is reported as blocked.
-  h.cli('set', 'review', 'agent=codex');
+  h.tentacle('review', { agent: 'codex' });
   const env = { ...h.env, PATH: `${new URL('./fakebin', import.meta.url).pathname}:/usr/bin:/bin` };
   const { spawnSync } = await import('node:child_process');
   const r = spawnSync(process.execPath, [new URL('../../src/bin.js', import.meta.url).pathname, 'doctor'],
@@ -59,5 +59,5 @@ test('tentacles(check_agents) and doctor report installed agents, versions and t
   assert.match(r.stdout, /^ok\s+opencode\s+opencode stub 0\.0\.0/m);
   assert.match(r.stdout, /^missing\s+codex\s+install: https:\/\/\S+\s+\(used by review\)/m);
   assert.match(r.stdout, /^problem\s+review use codex, which is not installed/m);
-  h.cli('reset', 'review');
+  h.tentacle('review', null);
 });

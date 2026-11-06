@@ -14,7 +14,6 @@ export const tryGit = (dir, ...args) => { try { return gitIn(dir, ...args); } ca
 function branchRun(id) {
   const run = mustRun(id);
   if (run.access !== 'write') throw new Error(`${id} is a ${run.tentacle} (read) run; nothing to merge or discard`);
-  if (!run.branch) throw new Error(`${id} edited the repo in place (isolation none); review it with git yourself`);
   if (run.outcome) throw new Error(`${id} was already ${run.outcome}`);
   if (IN_PROGRESS.includes(run.status)) throw new Error(`${id} is still ${run.status}; cancel it first`);
   return run;
@@ -83,7 +82,7 @@ function autoMergeBlockers(run, { review, conflicts, uncommitted, commits, dirty
     review?.verdict !== 'approve' ? `the latest review ${review ? `says ${review.verdict ?? review.status}` : 'is missing'}` : null,
     !run.verify_cmd ? 'it has no verify command (auto mode merges only verified work)' : null,
     run.verify_cmd && verifySource(run) === 'call'
-      ? 'its verify command was passed in the call, not set by the developer (krakenmcp set execute verify=...)' : null,
+      ? 'its verify command was passed in the call, not set by the developer (verify: in ~/.kraken/tentacles/execute.md)' : null,
     conflicts === null || conflicts.length ? 'merging may conflict' : null,
     uncommitted ? 'the worktree has uncommitted changes' : null,
     !commits ? 'the branch has no commits' : null,
@@ -92,7 +91,7 @@ function autoMergeBlockers(run, { review, conflicts, uncommitted, commits, dirty
 }
 
 // Two-step merge: without `confirm` it returns a preview and a confirm token (the branch head).
-// The coordinator must show the preview to the developer and only confirm after they say yes.
+// The head must show the preview to the developer and only confirm after they say yes.
 // In auto mode a branch with no blockers (see above) merges at once instead.
 export function mergeRun(id, confirm) {
   const run = branchRun(id);

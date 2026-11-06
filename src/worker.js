@@ -2,14 +2,13 @@
 // Started detached by the MCP server so long runs never block a tool call
 // and survive the server restarting.
 //
-// Once a second it checks the database: cancel() sets cancel_requested (portable: no signals, so
-// it works on Windows too), and the live cost/tokens are saved and checked against the run's
-// max_cost_usd / max_tokens and the daily budget. Stopping kills the agent's whole process tree.
+// Once a second it checks the database: cancel() sets cancel_requested, and the live cost/tokens are saved and checked against the run's
+// max_cost_usd / max_tokens. Stopping kills the agent's whole process tree.
 import { spawn, execFileSync } from 'node:child_process';
 import { createWriteStream, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveAgent } from './agents.js';
-import { db, getRun, updateRun, addMessage, nowIso, getSetting, spentToday, PLANS_DIR, LOGS_DIR } from './store.js';
+import { db, getRun, updateRun, addMessage, nowIso, PLANS_DIR, LOGS_DIR } from './store.js';
 import { pump } from './scheduler.js';
 import { killTree, runShell } from './platform.js';
 
@@ -35,19 +34,17 @@ const lastMessageFile = join(LOGS_DIR, `${runId}.last.txt`);
 // The prompt was rendered when the run was created (see tentacles.js); access maps to the agent's
 // read-only or write mode, so the prompt cannot widen permissions.
 const mode = run.access === 'read' ? 'plan' : 'execute';
-// Set when the run was created by resume/answer, or reuses a warm session (see warmSession in runs.js).
+// Set when the run was created by resume/answer.
 const resumeSession = run.native_session ?? null;
 const args = agent.build(mode, { prompt: run.prompt, model: run.model, effort: run.effort, lastMessageFile, resumeSession });
 // Agents that can enforce a spend cap themselves get it too (Kraken's own check is per second).
 if (limits.max_cost_usd && agent.budgetArgs) args.unshift(...agent.budgetArgs(limits.max_cost_usd));
-let target;
-try { target = agent.spawn(args); } catch (e) { failEarly(e.message); }
 const log = createWriteStream(join(LOGS_DIR, `${runId}.log`));
 
-// detached: on POSIX the agent gets its own process group, so cancel/timeout stop it and everything
+// detached: the agent gets its own process group, so cancel/timeout stop it and everything
 // it started. KRAKEN_PARENT_RUN tells a Kraken server started by this agent that it is nested.
-const child = spawn(target.command, target.args, { cwd: run.workdir, stdio: ['ignore', 'pipe', 'pipe'],
-  env: { ...process.env, KRAKEN_PARENT_RUN: runId }, detached: true, windowsHide: true });
+const child = spawn(agent.path, args, { cwd: run.workdir, stdio: ['ignore', 'pipe', 'pipe'],
+  env: { ...process.env, KRAKEN_PARENT_RUN: runId }, detached: true });
 child.on('error', (e) => failEarly(`could not start ${run.agent}: ${e.message}`));
 updateRun(runId, { status: 'running', pid: process.pid, agent_pid: child.pid ?? null, started_at: nowIso() });
 say('progress', `${resumeSession ? 'resumed' : 'started'} ${run.tentacle}: ${run.agent} ${run.model ?? '(default)'}${run.effort ? `#${run.effort}` : ''}`, run.agent);
@@ -93,11 +90,6 @@ function watch() {
   if (limits.max_tokens && usedTokens(p.tokens) > limits.max_tokens) {
     return stop('over_budget', `${usedTokens(p.tokens)} tokens passed max_tokens ${limits.max_tokens}, stopping agent`);
   }
-  const daily = Number(getSetting('daily_budget_usd'));
-  // spentToday() already counts this run's live cost (saved above).
-  if (daily > 0 && p.cost && spentToday() > daily) {
-    return stop('over_budget', `today's spend passed the daily budget $${daily}, stopping agent`);
-  }
 }
 const watcher = setInterval(watch, 1000);
 
@@ -106,22 +98,20 @@ const git = (...a) => execFileSync('git', ['-C', run.workdir, ...a], { encoding:
 const exclude = (agent.ignore ?? []).map((g) => `:(exclude,glob)${g}`);
 
 // Sum `git diff --numstat` output: "<ins>\t<del>\t<path>" ("-" for binary files).
-function sumNumstat(out, extraFiles = 0) {
+function sumNumstat(out) {
   const lines = out.split('\n').filter(Boolean);
   let insertions = 0, deletions = 0;
   for (const l of lines) {
     const [i, d] = l.split('\t');
     insertions += Number(i) || 0; deletions += Number(d) || 0;
   }
-  return { files: lines.length + extraFiles, insertions, deletions };
+  return { files: lines.length, insertions, deletions };
 }
 
 function diffStat() {
   try {
-    if (run.branch) { git('add', '-A', '--', '.', ...exclude); return sumNumstat(git('diff', '--cached', '--numstat')); }
-    // isolation "none": don't touch the developer's index; count untracked files separately.
-    const untracked = git('ls-files', '--others', '--exclude-standard').split('\n').filter(Boolean).length;
-    return { ...sumNumstat(git('diff', '--numstat', 'HEAD')), untracked_files: untracked };
+    git('add', '-A', '--', '.', ...exclude);
+    return sumNumstat(git('diff', '--cached', '--numstat'));
   } catch { return null; }
 }
 

@@ -12,7 +12,7 @@ npm test        # unit tests + end-to-end tests against a stub agent (no tokens)
 npm run test:coverage
 ```
 
-Requires Node 22.13+ (for `node:sqlite`), git, and macOS or Linux (Windows is experimental).
+Requires Node 22.13+ (for `node:sqlite`), git, and macOS or Linux.
 
 ## Layout
 
@@ -21,20 +21,20 @@ Requires Node 22.13+ (for `node:sqlite`), git, and macOS or Linux (Windows is ex
 | `src/bin.js` | `krakenmcp` entry: server by default, CLI with a subcommand |
 | `src/server.js` | MCP tool definitions and server instructions |
 | `src/mcp.js`, `src/schema.js` | The MCP protocol over stdio (no SDK) and tool input schemas with their validator |
-| `src/runs.js` | Creating runs (and warm session reuse), status views, the session summary and stats |
+| `src/runs.js` | Creating runs, status views, the session summary and stats |
 | `src/control.js` | cancel and resume (which also answers a waiting run) |
 | `src/branches.js` | Git and `kraken/<run_id>` branches: merge (and approval mode), discard, update, review diffs |
-| `src/scheduler.js` | Parallel-run limit, daily budget, starting workers, recovering dead runs |
+| `src/scheduler.js` | Parallel-run limit, starting workers, recovering dead runs |
 | `src/prune.js` | `krakenmcp prune` |
 | `src/worker.js` | Background process that runs one agent, enforces budgets and records the result |
 | `src/pipeline.js`, `src/pipeline-driver.js` | Pipeline state machine and the detached process that drives it |
 | `src/platform.js` | Everything OS-specific: finding and starting executables, killing process trees, shells |
-| `src/tentacles.js` | Tentacle files, layered settings, trust, prompt rendering |
+| `src/tentacles.js` | Tentacle files, layered settings, prompt rendering |
 | `src/tentacles/*.md` | The built-in tentacles: settings header plus prompt |
 | `src/agents.js`, `src/agents/*.js` | The adapter contract and registry; one file per agent CLI: flags in, normalized metrics out |
 | `src/store.js` | SQLite schema and queries |
-| `test/unit/` | `node:test` unit tests (settings, tentacle files, prompts, adapters, the MCP protocol, about) |
-| `test/e2e/` | Starts the real server through `krakenmcp` and drives it over MCP; agents are the stub in `test/e2e/fakebin/stub.mjs` (entry points `opencode`, `opencode.cmd`) |
+| `test/unit/` | `node:test` unit tests (settings, tentacle files, prompts, adapters, the MCP protocol) |
+| `test/e2e/` | Starts the real server through `krakenmcp` and drives it over MCP; agents are the stub in `test/e2e/fakebin/stub.mjs` (entry point `opencode`) |
 | `test/smoke/` | Manual run against a real agent (spends tokens); not part of `npm test` |
 
 ## Guidelines

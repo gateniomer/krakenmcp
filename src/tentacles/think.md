@@ -1,10 +1,9 @@
 ---
-description: Escalate a hard reasoning problem to a stronger model (read-only): feature logic/design, algorithms, state/timing/concurrency, cross-system changes, or a bug that resisted an attempt. Returns analysis, options, a recommendation and open questions; the caller turns it into advice for the developer.
+description: Escalate a hard reasoning problem to a stronger model (read-only): feature logic/design, algorithms, state/timing/concurrency, cross-system changes, or a bug that resisted an attempt. Returns analysis, options, a recommendation and open questions; the head turns it into advice for the developer.
 access: read
 agent: claude
 model: opus
 effort: high
-isolation: none
 timeout_min: 30
 ---
 You are the THINKER: a senior engineer asked to reason through a hard problem for another agent,

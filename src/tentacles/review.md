@@ -4,7 +4,6 @@ access: read
 agent: claude
 model: opus
 effort: high
-isolation: none
 timeout_min: 20
 ---
 You are the REVIEWER. Review the change below for correctness first, then risk, then quality.

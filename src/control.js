@@ -5,7 +5,7 @@ import { resolveAgent } from './agents.js';
 import { renderResumePrompt } from './tentacles.js';
 import { IN_PROGRESS, newId, insertRun, getRun, updateRun, addMessage, nowIso } from './store.js';
 import { alive, killTree } from './platform.js';
-import { pump, queueInfo, checkBudget } from './scheduler.js';
+import { pump, queueInfo } from './scheduler.js';
 import { ensureWorktree, tryGit } from './branches.js';
 
 export function mustRun(id) {
@@ -40,7 +40,6 @@ export function cancelRun(id) {
 
 // Continue a finished or waiting run in its native agent session, in the same workdir/branch.
 export function resumeRun(id, input, { session, answering = false, syncBase, merging = false } = {}) {
-  checkBudget();
   const prev = mustRun(id);
   if (IN_PROGRESS.includes(prev.status)) throw new Error(`${id} is still ${prev.status}`);
   if (prev.status === 'cancelled') throw new Error(`${id} was cancelled; start a new run instead`);

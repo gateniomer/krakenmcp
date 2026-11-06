@@ -2,13 +2,14 @@
 // Uses Node's built-in node:sqlite (Node 22.5+), WAL mode so several
 // processes can read/write at once.
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+export const VERSION = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
 // Per-user data (database, plans, logs, worktrees). Override with KRAKEN_DATA.
 export const DATA_DIR = process.env.KRAKEN_DATA || join(homedir(), '.kraken');
 export const PLANS_DIR = join(DATA_DIR, 'plans');   // results of read tentacles, as Markdown
@@ -74,27 +75,7 @@ db.exec(`
     body       TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
-  -- Tentacle settings per scope: 'global' or 'repo:<absolute repo path>'.
-  CREATE TABLE IF NOT EXISTS tentacles (
-    scope      TEXT NOT NULL,
-    name       TEXT NOT NULL,
-    settings   TEXT NOT NULL,               -- JSON with only the fields set at this scope
-    locked     INTEGER NOT NULL DEFAULT 0,  -- unused since 0.5 (only the CLI stores settings)
-    updated_by TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (scope, name)
-  );
-  CREATE TABLE IF NOT EXISTS config_changes (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    scope      TEXT NOT NULL,
-    name       TEXT NOT NULL,
-    actor      TEXT NOT NULL,               -- 'cli:developer' ('mcp:<client name>' before 0.5)
-    action     TEXT NOT NULL,               -- set | reset | limit | budget | mode | trust | untrust
-    before     TEXT,
-    after      TEXT,
-    created_at TEXT NOT NULL
-  );
-  -- Server-wide settings, e.g. max_parallel, daily_budget_usd.
+  -- Server-wide settings, e.g. max_parallel, approval_mode.
   CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -132,6 +113,9 @@ addColumns('runs', {
   stop_reason: 'TEXT',                            // why Kraken stopped it: budget details
   pipeline_id: 'TEXT',
 });
+// Left by older versions: stored tentacle settings, their change log, repo-file trust, daily budget.
+db.exec(`DROP TABLE IF EXISTS tentacles; DROP TABLE IF EXISTS config_changes;
+  DELETE FROM settings WHERE key LIKE 'trust:%' OR key = 'daily_budget_usd';`);
 
 // Statuses: queued, running (in progress); done, failed, verify_failed, timeout, cancelled,
 // over_budget (stopped at max_cost_usd / max_tokens); waiting (the agent asked the developer a
@@ -181,35 +165,6 @@ export const listRuns = (session, limit = 20) =>
 export const allRuns = (session) =>
   db.prepare('SELECT * FROM runs WHERE session = ? ORDER BY created_at').all(session);
 
-// ---- tentacle config ----
-
-export const getTentacleRow = (scope, name) =>
-  db.prepare('SELECT * FROM tentacles WHERE scope = ? AND name = ?').get(scope, name);
-
-export const tentacleRows = (scopes) =>
-  db.prepare(`SELECT * FROM tentacles WHERE scope IN (${scopes.map(() => '?').join(',')})`).all(...scopes);
-
-export function saveTentacleRow({ scope, name, settings, actor, action, before }) {
-  db.prepare(`INSERT INTO tentacles (scope, name, settings, locked, updated_by, updated_at) VALUES (?,?,?,?,?,?)
-              ON CONFLICT (scope, name) DO UPDATE SET settings = excluded.settings, locked = excluded.locked,
-                updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
-    .run(scope, name, JSON.stringify(settings), 0, actor, nowIso());
-  logChange({ scope, name, actor, action, before, after: { settings } });
-}
-
-export function deleteTentacleRow({ scope, name, actor, before }) {
-  db.prepare('DELETE FROM tentacles WHERE scope = ? AND name = ?').run(scope, name);
-  logChange({ scope, name, actor, action: 'reset', before, after: null });
-}
-
-function logChange({ scope, name, actor, action, before, after }) {
-  db.prepare('INSERT INTO config_changes (scope, name, actor, action, before, after, created_at) VALUES (?,?,?,?,?,?,?)')
-    .run(scope, name, actor, action, before ? JSON.stringify(before) : null, after ? JSON.stringify(after) : null, nowIso());
-}
-
-export const configChanges = (limit = 20) =>
-  db.prepare('SELECT * FROM config_changes ORDER BY id DESC LIMIT ?').all(limit);
-
 // Latest review of a run (review runs record target_run + verdict).
 export const latestReview = (runId) =>
   db.prepare(`SELECT id, status, verdict, agent, model, finished_at FROM runs
@@ -218,12 +173,6 @@ export const latestReview = (runId) =>
 // The run that resumed `id` (answer / resume create a new run with resumed_from = id).
 export const resumedBy = (id) =>
   db.prepare('SELECT id FROM runs WHERE resumed_from = ? ORDER BY created_at DESC LIMIT 1').get(id)?.id ?? null;
-
-// Spend since local midnight, for the daily budget.
-export function spentToday() {
-  const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
-  return db.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS c FROM runs WHERE created_at >= ?').get(midnight.toISOString()).c;
-}
 
 // ---- pipelines ----
 
@@ -245,11 +194,8 @@ export const listPipelines = (session, limit = 20) =>
 
 export const getSetting = (key) => db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value ?? null;
 
-export function setSetting(key, value, actor, action = 'limit') {
-  const before = getSetting(key);
+export function setSetting(key, value) {
   if (value === null) db.prepare('DELETE FROM settings WHERE key = ?').run(key);
   else db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value')
     .run(key, String(value));
-  db.prepare('INSERT INTO config_changes (scope, name, actor, action, before, after, created_at) VALUES (?,?,?,?,?,?,?)')
-    .run('global', key, actor, action, before, value === null ? null : String(value), nowIso());
 }

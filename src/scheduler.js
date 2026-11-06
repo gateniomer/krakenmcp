@@ -1,25 +1,9 @@
-// Scheduling: at most max_parallel runs at once (the rest wait as 'queued'), the daily budget, and
-// recovery of runs whose worker died. Workers and pipeline drivers are detached node processes.
+// Scheduling: at most max_parallel runs at once (the rest wait as 'queued'), and recovery of runs
+// whose worker died. Workers and pipeline drivers are detached node processes.
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { ROOT, db, getRun, updateRun, addMessage, nowIso, getSetting, spentToday } from './store.js';
+import { ROOT, db, getRun, updateRun, addMessage, nowIso, getSetting } from './store.js';
 import { alive, killTree } from './platform.js';
-
-// ---- daily budget: no new runs once today's spend reaches it ----
-
-export function dailyBudget() {
-  const v = Number(getSetting('daily_budget_usd'));
-  return v > 0 ? v : null;
-}
-export function checkBudget() {
-  const budget = dailyBudget();
-  if (!budget) return;
-  const spent = spentToday();
-  if (spent >= budget) {
-    throw new Error(`today's spend $${spent.toFixed(2)} has reached the daily budget $${budget}. ` +
-      'The developer can raise it with: krakenmcp budget <usd>');
-  }
-}
 
 // ---- scheduling: at most max_parallel runs at once; the rest wait as 'queued' ----
 
@@ -87,7 +71,7 @@ export function startWorker(runId) {
 
 export function startNode(script, id) {
   const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', join(ROOT, 'src', script), id], {
-    detached: true, stdio: 'ignore', env: process.env, windowsHide: true,
+    detached: true, stdio: 'ignore', env: process.env,
   });
   child.unref();
   return child.pid;

@@ -2,25 +2,23 @@
 // Kraken MCP server: tool definitions. Run logic lives in runs.js / control.js /
 // branches.js / scheduler.js, settings in tentacles.js.
 // Usage guidance is sent once as server instructions; tool descriptions stay short because they are
-// resent with every request the coordinator makes.
+// resent with every request the head makes.
 import './quiet.js';
 import { createServer } from './mcp.js';
 import { str, num, int, bool, oneOf, list, obj } from './schema.js';
-import { readFileSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { agentInfo, checkAgents, AGENTS } from './agents.js';
-import { ROOT, PLANS_DIR, IN_PROGRESS, getRun, configChanges, getPipeline, recentMessages, resumedBy,
-  spentToday } from './store.js';
+import { IN_PROGRESS, getRun, getPipeline, recentMessages, VERSION } from './store.js';
 import { cancelRun, resumeRun } from './control.js';
 import { mergeRun, discardRun, syncBranch } from './branches.js';
-import { pump, maxParallel, dailyBudget } from './scheduler.js';
+import { pump, maxParallel } from './scheduler.js';
 import { approvalMode } from './branches.js';
 import { startPipeline, cancelPipeline, describePipeline, isPipelineId, pipelineStatus } from './pipeline.js';
 import { resolveTentacle, knownNames, userDir, userTentacles } from './tentacles.js';
 import { startRun, describe, sessionSummary, clip, agentReport } from './runs.js';
-import { VERSION } from './about.js';
 
-const INSTRUCTIONS = `Kraken delegates work to other headless coding agents. Each action is a "tentacle".
+const INSTRUCTIONS = `Kraken delegates work to other headless coding agents. Each action is a "tentacle"; you are the head
+(the agent the developer talks to) that sends work to them.
 Runs are asynchronous: every start tool returns a run_id at once; then call status(run_id, wait_seconds: 50)
 until the status is no longer queued/running. Do not poll faster.
 
@@ -44,11 +42,13 @@ If merge reports conflicts (or its preview predicts them), call update(run_id): 
 into the run's branch and, on conflicts, resumes the agent to resolve them.
 
 If status is "waiting", the agent asked a question only the developer can answer: ask them, then call
-resume(run_id, their reply). A run stopped as "over_budget" hit max_cost_usd / max_tokens or the daily budget.
+resume(run_id, their reply). A run stopped as "over_budget" hit its max_cost_usd / max_tokens.
 Use explain(area) instead of reading many files yourself.
-When a think, plan, review or explain run finishes, give the developer its result_file path so they can read
+For questions that need current information from the web (APIs, versions, library choices), call
+run(tentacle: "research", input: question) instead of answering from memory.
+When a think, plan, review, explain or research run finishes, give the developer its result_file path so they can read
 the full text (or tell them: krakenmcp show <run_id>).
-Settings are the developer's: they change them with the krakenmcp CLI (krakenmcp set, or tentacle files).`;
+Settings are the developer's: they change them by editing tentacle files in ~/.kraken/tentacles/.`;
 
 const SESSION = str({ default: 'default', description: 'Run group label' });
 const CWD = str({ description: 'Repository path' });
@@ -61,19 +61,14 @@ const fail = (msg) => ({ ...text(`Error: ${msg}`), isError: true });
 const attempt = (fn) => {
   try {
     const r = fn();
-    if (r && typeof r === 'object' && typeof r.run_id === 'string' && r.status === 'queued') watch(r.run_id);
     return text(r);
   } catch (e) { return fail(e.message); }
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Server icon (MCP Implementation.icons), embedded as data URIs so it works without a web server.
-const icon = (file, mimeType, sizes) =>
-  ({ src: `data:${mimeType};base64,${readFileSync(join(ROOT, 'assets', file)).toString('base64')}`, mimeType, sizes });
 const server = createServer({
   info: { name: 'kraken', title: 'Kraken', version: VERSION,
-    description: 'Delegate think / plan / execute / review work to headless coding agents.',
-    icons: [icon('icon.png', 'image/png', ['256x256']), icon('icon.svg', 'image/svg+xml', ['any'])] },
+    description: 'Delegate think / plan / execute / review work to headless coding agents.' },
   instructions: INSTRUCTIONS,
 });
 const dirOf = (cwd) => resolve(cwd ?? process.cwd());
@@ -98,10 +93,9 @@ server.tool('plan', {
 server.tool('execute', {
   description: 'Implement a finished plan on branch kraken/<run_id> in a separate worktree.',
   input: { plan_id: RUN_ID, ...OVERRIDES,
-    isolation: oneOf(['worktree', 'none'], { description: '"none" edits the checkout in place' }),
     verify: str({ description: 'Command to run after, e.g. "npm test"' }), session: SESSION },
-}, async ({ plan_id, agent, model, effort, isolation, verify, session }) =>
-  attempt(() => startRun('execute', { plan_id, session, overrides: { agent, model, effort, isolation, verify } })));
+}, async ({ plan_id, agent, model, effort, verify, session }) =>
+  attempt(() => startRun('execute', { plan_id, session, overrides: { agent, model, effort, verify } })));
 
 server.tool('review', {
   description: 'Review a run\'s branch (with its plan), or uncommitted changes when run_id is omitted. ' +
@@ -139,7 +133,6 @@ server.tool('status', {
   const busy = (x) => (pipe ? pipelineStatus(x) === 'running' : IN_PROGRESS.includes(x.status));
   let item = load();
   if (!item) return fail(`no ${pipe ? 'pipeline' : 'run'} ${run_id}`);
-  watch(run_id);
   const started = Date.now(), deadline = started + wait_seconds * 1000;
   let lastNote = null;
   while (busy(item) && Date.now() < deadline) {
@@ -179,7 +172,7 @@ server.tool('update', {
   description: 'Merge the current branch into a run\'s branch (when it is behind or merge conflicts). On conflicts ' +
     'the run\'s agent resolves them as a new run, unless resolve is false.',
   input: { run_id: RUN_ID, resolve: bool({ default: true }) },
-}, async ({ run_id, resolve: res }) => attempt(() => { const r = syncBranch(run_id, { resolve: res }); if (r.run_id) watch(r.run_id); return r; }));
+}, async ({ run_id, resolve: res }) => attempt(() => syncBranch(run_id, { resolve: res })));
 
 const STAGE = obj(OVERRIDES);
 server.tool('pipeline', {
@@ -189,12 +182,8 @@ server.tool('pipeline', {
     verify: str({ description: 'Command to run after each write step, e.g. "npm test"' }),
     max_fix_rounds: int({ min: 0, max: 5, default: 1 }), context_runs: CONTEXT_RUNS, cwd: CWD,
     plan: STAGE, execute: STAGE, review: STAGE, session: SESSION },
-}, async ({ task, verify, max_fix_rounds, context_runs, cwd, plan, execute, review, session }) => attempt(() => {
-  const r = startPipeline({ task, verify, max_fix_rounds, context_runs, cwd, session,
-    overrides: { plan, execute, review } });
-  watch(r.pipeline_id);
-  return r;
-}));
+}, async ({ task, verify, max_fix_rounds, context_runs, cwd, plan, execute, review, session }) => attempt(() =>
+  startPipeline({ task, verify, max_fix_rounds, context_runs, cwd, session, overrides: { plan, execute, review } })));
 
 server.tool('merge', {
   description: 'Without confirm: a preview and confirm_token. With confirm: merge the run\'s branch into the ' +
@@ -225,7 +214,7 @@ server.tool('tentacles', {
   const list = knownNames(dir).map((n) => {
     try {
       const t = resolveTentacle(n, dir);
-      return { name: n, builtin: t.builtin, needs_plan: t.needs_plan, user_file: t.user_file, repo_file: t.repo_file,
+      return { name: n, builtin: t.builtin, needs_plan: t.needs_plan, user_file: t.user_file,
         settings: { ...t.settings, prompt: show_prompts ? t.settings.prompt : clip(t.settings.prompt, 120) },
         sources: t.sources };
     } catch (e) { return { name: n, error: e.message }; }
@@ -233,71 +222,9 @@ server.tool('tentacles', {
   const agents = agentReport(dir, check_agents ? checkAgents : agentInfo);
   return text({ repo: list[0]?.repo, tentacles: list, agents: agents.agents,
     agent_problems: agents.problems.length ? agents.problems : undefined,
-    limits: { max_parallel: maxParallel(), daily_budget_usd: dailyBudget(), spent_today_usd: Number(spentToday().toFixed(4)),
+    limits: { max_parallel: maxParallel(),
       approval_mode: approvalMode() },
-    repo_file: list.find((t) => t.repo_file)?.repo_file,
-    user_files: { dir: userDir(), problems: userTentacles().problems.length ? userTentacles().problems : undefined },
-    recent_changes: configChanges(5) });
+    user_files: { dir: userDir(), problems: userTentacles().problems.length ? userTentacles().problems : undefined } });
 });
-
-// ---- runs as resources, and notifications when they finish ----
-
-server.resourceTemplate({
-  uriTemplate: 'kraken://run/{id}', name: 'run', title: 'Kraken run or pipeline',
-  description: 'Status, metrics and result of a run (or pipeline) id', mimeType: 'application/json',
-  match: /^kraken:\/\/run\/(?<id>[^/]+)$/,
-  read(uri, { id }) {
-    const item = isPipelineId(id) ? getPipeline(id) : getRun(id);
-    if (!item) throw new Error(`no run ${id}`);
-    return { uri, mimeType: 'application/json',
-      text: JSON.stringify(isPipelineId(id) ? describePipeline(item) : describe(item), null, 2) };
-  },
-});
-
-server.resourceTemplate({
-  uriTemplate: 'kraken://result/{id}', name: 'result', title: 'Kraken run result',
-  description: 'Full Markdown result of a finished run (plan, review, analysis)', mimeType: 'text/markdown',
-  match: /^kraken:\/\/result\/(?<id>[^/]+)$/,
-  read(uri, { id }) {
-    const run = getRun(id);
-    if (!run) throw new Error(`no run ${id}`);
-    const file = join(PLANS_DIR, `${id}.md`);
-    const body = existsSync(file) ? readFileSync(file, 'utf8') : run.result;
-    if (!body) throw new Error(`run ${id} has no result yet (status ${run.status})`);
-    return { uri, mimeType: 'text/markdown', text: body };
-  },
-});
-
-// Runs and pipelines this server has seen, with their last status. When one finishes (or starts
-// waiting for an answer) the client gets a log message, and a resources/updated notification if
-// it subscribed to kraken://run/<id>.
-const watched = new Map();
-function watch(id) {
-  const item = isPipelineId(id) ? getPipeline(id) : getRun(id);
-  if (item && !watched.has(id)) watched.set(id, item.status);
-}
-server.onSubscribe = (uri) => { const m = uri?.match(/^kraken:\/\/run\/(.+)$/); if (m) watch(m[1]); };
-
-const SETTLED = ['done', 'failed', 'verify_failed', 'timeout', 'cancelled', 'over_budget', 'waiting'];
-function checkWatched() {
-  for (const [id, last] of watched) {
-    const pipe = isPipelineId(id);
-    const item = pipe ? getPipeline(id) : getRun(id);
-    if (!item || item.status === last) continue;
-    watched.set(id, item.status);
-    const uri = `kraken://run/${id}`;
-    if (server.isSubscribed(uri)) server.resourceUpdated(uri);
-    if (pipe ? ['done', 'failed', 'cancelled', 'waiting'].includes(item.status) : SETTLED.includes(item.status)) {
-      server.log(item.status === 'failed' ? 'warning' : 'info', 'kraken', { event: pipe ? 'pipeline' : 'run', id,
-        status: item.status, next: item.status === 'waiting' ? 'answer the question with resume' : `status("${id}")` });
-    }
-    if (pipe ? ['done', 'failed', 'cancelled'].includes(item.status) : (SETTLED.includes(item.status) && item.status !== 'waiting')) {
-      watched.delete(id);
-    }
-    // An answered run continues as a new run id: follow it.
-    if (!pipe && item.status === 'answered') { const next = resumedBy(id); if (next) watch(next); watched.delete(id); }
-  }
-}
-setInterval(() => { try { checkWatched(); } catch { /* db busy: next tick */ } }, 2000).unref();
 
 server.start();

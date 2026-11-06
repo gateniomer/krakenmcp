@@ -7,7 +7,7 @@ import {
   PLANS_DIR, LOGS_DIR, WORKTREES_DIR, IN_PROGRESS, newId, insertRun, getRun, recentMessages, allRuns, latestReview,
   listRuns, listPipelines, db,
 } from './store.js';
-import { pump, queueInfo, checkBudget } from './scheduler.js';
+import { pump, queueInfo } from './scheduler.js';
 import { reviewInput, gitIn } from './branches.js';
 import { resolveTentacle, renderPrompt, formatContext, knownNames } from './tentacles.js';
 
@@ -56,7 +56,6 @@ export function describe(run, full = false) {
     outcome: run.outcome ? `${run.outcome}: ${run.outcome_detail}` : undefined,
     verdict: run.verdict ?? undefined, target_run: run.target_run ?? undefined,
     resumed_from: run.resumed_from ?? undefined,
-    reused_session_of: parse(run.config)?.reused_session_of,
     review: run.access === 'write' && run.branch ? latestReview(run.id) ?? undefined : undefined,
     result_file: existsSync(resultFile) ? resultFile : undefined,
     workdir: run.workdir, branch: run.branch ?? undefined,
@@ -75,7 +74,6 @@ export function describe(run, full = false) {
 
 // Create and start a run of any tentacle.
 export function startRun(name, { input, plan_id, context_runs = [], target_run, cwd, session, overrides, pipeline_id }) {
-  checkBudget();
   let planRun = null;
   if (plan_id) {
     planRun = getRun(plan_id);
@@ -118,11 +116,10 @@ export function startRun(name, { input, plan_id, context_runs = [], target_run, 
     ?? (t.needs_diff ? 'Review the uncommitted changes in this repository.' : undefined);
   if (!task) throw new Error('input is required');
 
-  const warm = warmSession(name, t, { dir, session, hasContext: contextRuns.length > 0 });
   const id = newId(name.slice(0, 8));
   let workdir = readDir, branch = null, base_sha = null;
-  if (s.access === 'write' && s.isolation === 'worktree') {
-    if (!isGitRepo(dir)) throw new Error(`${dir} is not a git repo; set isolation "none" for this tentacle`);
+  if (s.access === 'write') {
+    if (!isGitRepo(dir)) throw new Error(`${dir} is not a git repo; write tentacles work on a branch in a git worktree`);
     workdir = join(WORKTREES_DIR, id);
     branch = `kraken/${id}`;
     base_sha = gitIn(dir, 'rev-parse', 'HEAD');
@@ -132,10 +129,9 @@ export function startRun(name, { input, plan_id, context_runs = [], target_run, 
   insertRun({
     id, session, tentacle: name, access: s.access, plan_id: planRun?.id, task, agent: s.agent, model: s.model,
     effort: s.effort, prompt,
-    config: { settings: { ...s, prompt: undefined }, sources: t.sources, context_runs: contextRuns.map((r) => r.id), limits,
-      reused_session_of: warm?.id },
+    config: { settings: { ...s, prompt: undefined }, sources: t.sources, context_runs: contextRuns.map((r) => r.id), limits },
     timeout_min: s.timeout_min, cwd: dir, workdir, branch, verify_cmd: s.access === 'write' ? s.verify : null,
-    base_sha, target_run: targetRun?.id, pipeline_id, native_session: warm?.native_session,
+    base_sha, target_run: targetRun?.id, pipeline_id,
   });
   pump();
   return {
@@ -145,61 +141,39 @@ export function startRun(name, { input, plan_id, context_runs = [], target_run, 
     limits: limits.max_cost_usd || limits.max_tokens ? limits : undefined,
     warnings: warnings.length ? warnings : undefined,
     note: branch ? 'Uncommitted changes in the main checkout are NOT in the worktree.' : undefined,
-    reused_session_of: warm?.id,
   };
 }
 
-// Token saver: a read tentacle with reuse_session_min continues the agent session of the same
-// tentacle's last run (same session label, repo, agent, model, effort) if that finished within the
-// window. The agent keeps what it already read, and providers' prompt caches (often ~5 minutes)
-// make the shared history cheap. Not for review ({{diff}}: each review starts unbiased) or write runs
-// (each has its own worktree), and not when context_runs are passed in.
-export function warmSession(name, t, { dir, session, hasContext }) {
-  const s = t.settings, mins = s.reuse_session_min;
-  if (!(mins > 0) || s.access !== 'read' || t.needs_diff || hasContext) return null;
-  const since = new Date(Date.now() - mins * 60_000).toISOString();
-  return db.prepare(`SELECT id, native_session FROM runs WHERE tentacle = ? AND session = ? AND cwd = ? AND agent = ?
-      AND model IS ? AND effort IS ? AND status = 'done' AND native_session IS NOT NULL AND finished_at > ?
-      ORDER BY finished_at DESC LIMIT 1`).get(name, session, dir, s.agent, s.model ?? null, s.effort ?? null, since) ?? null;
-}
-
-
-// Totals per tentacle | agent | model in a session.
+// Totals per tentacle | agent | model in a session. Per-run detail is in status.
+// failed counts every run that ended badly: failed, verify_failed, timeout, over_budget.
+const FAILED = ['failed', 'verify_failed', 'timeout', 'over_budget'];
 export function sessionStats(session) {
   const groups = new Map();
   for (const r of allRuns(session)) {
     const key = `${r.tentacle} | ${r.agent} | ${r.model ?? 'default'}${r.effort ? `#${r.effort}` : ''}`;
-    const g = groups.get(key) ?? { group: key, runs: 0, done: 0, failed: 0, verify_failed: 0, timeout: 0, cancelled: 0,
-      waiting: 0, answered: 0, over_budget: 0, in_progress: 0, merged: 0, discarded: 0,
-      tokens: { input: 0, output: 0, reasoning: 0, cache_read: 0, cache_write: 0 }, cost_usd: 0,
-      total_duration_ms: 0, timed_runs: 0, tool_calls: 0, failed_tool_calls: 0, files_changed: 0, insertions: 0, deletions: 0 };
+    const g = groups.get(key) ?? { group: key, runs: 0, done: 0, failed: 0, cost_usd: 0,
+      tokens: { input: 0, output: 0 }, total_duration_ms: 0, timed_runs: 0 };
     g.runs++;
-    if (IN_PROGRESS.includes(r.status)) g.in_progress++; else g[r.status] = (g[r.status] ?? 0) + 1;
-    if (r.outcome) g[r.outcome]++;
+    if (r.status === 'done') g.done++;
+    if (FAILED.includes(r.status)) g.failed++;
     const t = parse(r.tokens) ?? {};
-    for (const k of Object.keys(g.tokens)) g.tokens[k] += t[k] || 0;
+    g.tokens.input += t.input || 0; g.tokens.output += t.output || 0;
     g.cost_usd += r.cost_usd || 0;
     if (r.duration_ms != null) { g.total_duration_ms += r.duration_ms; g.timed_runs++; }
-    const tc = parse(r.tool_calls); if (tc) { g.tool_calls += tc.total; g.failed_tool_calls += tc.failed; }
-    const d = parse(r.diff_stat); if (d) { g.files_changed += d.files; g.insertions += d.insertions; g.deletions += d.deletions; }
     g.not_reported ??= notReported(r.agent);
     groups.set(key, g);
   }
-  const rows = [...groups.values()].map(({ timed_runs, ...g }) => ({
-    ...g, avg_duration_ms: timed_runs ? Math.round(g.total_duration_ms / timed_runs) : null,
-    not_reported: g.not_reported.length ? g.not_reported : undefined,
+  const rows = [...groups.values()].map(({ timed_runs, total_duration_ms, not_reported, ...g }) => ({
+    ...g, avg_duration_ms: timed_runs ? Math.round(total_duration_ms / timed_runs) : null,
+    not_reported: not_reported.length ? not_reported : undefined,
   }));
-  const partial = rows.filter((g) => g.not_reported).map((g) => `${g.group}: no ${g.not_reported.join('/')}`);
   const total = rows.reduce((a, g) => ({
-    runs: a.runs + g.runs, cost_usd: a.cost_usd + g.cost_usd, total_duration_ms: a.total_duration_ms + g.total_duration_ms,
-    tokens: Object.fromEntries(Object.keys(g.tokens).map((k) => [k, (a.tokens[k] || 0) + g.tokens[k]])),
-  }), { runs: 0, cost_usd: 0, total_duration_ms: 0, tokens: {} });
-  return { session, groups: rows, total,
-    note: 'Runs from before metrics were added have no duration/cost/tool-call data.' +
-      (partial.length ? ` Totals leave out what these agents do not report: ${partial.join('; ')}.` : '') };
+    runs: a.runs + g.runs, cost_usd: a.cost_usd + g.cost_usd,
+    tokens: { input: a.tokens.input + g.tokens.input, output: a.tokens.output + g.tokens.output },
+  }), { runs: 0, cost_usd: 0, tokens: { input: 0, output: 0 } });
+  return { session, groups: rows, total };
 }
 
-// The `session` tool: what needs the developer now, recent history, and totals.
 export function sessionSummary(session) {
   const all = allRuns(session);
   const ids = (pred) => all.filter(pred).map((r) => r.id);
@@ -218,7 +192,6 @@ export function sessionSummary(session) {
     groups: stats.groups,
     runs: listRuns(session),
     pipelines: pipelines.length ? pipelines : undefined,
-    note: stats.note,
   };
 }
 

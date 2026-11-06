@@ -131,11 +131,11 @@ test('an agent killed from outside ends the run as failed, not stuck running', a
 test('a database from an older version gets the new columns on first use', () => {
   const data = mkdtempSync(join(tmpdir(), 'kraken-olddb-'));
   const first = { ...h.env, KRAKEN_DATA: data };
-  execFileSync(process.execPath, [new URL('../../src/bin.js', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'), 'limit'], { env: first });
+  execFileSync(process.execPath, [new URL('../../src/bin.js', import.meta.url).pathname, 'limit'], { env: first });
   const db = new DatabaseSync(join(data, 'kraken.db'));
   for (const c of ['cancel_requested', 'stop_reason', 'pipeline_id']) db.exec(`ALTER TABLE runs DROP COLUMN ${c}`);
   db.close();
-  execFileSync(process.execPath, [new URL('../../src/bin.js', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'), 'limit'], { env: first });
+  execFileSync(process.execPath, [new URL('../../src/bin.js', import.meta.url).pathname, 'limit'], { env: first });
   const again = new DatabaseSync(join(data, 'kraken.db'));
   const cols = again.prepare('PRAGMA table_info(runs)').all().map((c) => c.name);
   again.close();

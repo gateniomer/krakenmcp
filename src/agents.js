@@ -12,7 +12,7 @@
 // ignore: pathspecs Kraken leaves out of commits (files the agent writes for itself).
 
 import { spawnSync } from 'node:child_process';
-import { which, spawnTarget } from './platform.js';
+import { which } from './platform.js';
 import opencode from './agents/opencode.js';
 import claude from './agents/claude.js';
 import codex from './agents/codex.js';
@@ -38,7 +38,7 @@ export function resolveAgent(name) {
   if (!a) throw new Error(`Unknown agent "${name}". Known: ${Object.keys(AGENTS).join(', ')}`);
   const path = findBin(a);
   if (!path) throw new Error(`Agent "${name}" is not installed (no ${binsOf(a).map((b) => `"${b}"`).join(' or ')} on PATH).`);
-  return { ...a, path, spawn: (args) => spawnTarget(path, args) };
+  return { ...a, path };
 }
 
 // Health check for `agents` (MCP) and `krakenmcp doctor`: install state, path, version, docs.
@@ -48,10 +48,8 @@ export function checkAgents(path = process.env.PATH) {
     const bin = findBin(a, path);
     if (!bin) return { name, installed: false, looked_for: binsOf(a), install_docs: a.docs };
     let r;
-    try {
-      const { command, args } = spawnTarget(bin, ['--version']);
-      r = spawnSync(command, args, { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-    } catch (e) { r = { status: null, error: e }; }
+    try { r = spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch (e) { r = { status: null, error: e }; }
     const version = `${r.stdout ?? ''}${r.stderr ?? ''}`.split('\n').map((l) => l.trim()).find(Boolean) ?? null;
     return { name, installed: true, path: bin, version: r.status === 0 ? version : null,
       ...(r.status === 0 ? {} : { problem: `"${bin} --version" failed${r.error ? `: ${r.error.message}` : ''}` }) };

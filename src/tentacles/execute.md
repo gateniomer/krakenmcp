@@ -1,8 +1,7 @@
 ---
-description: Implement a finished plan (writes code, in a git worktree by default).
+description: Implement a finished plan (writes code on its own branch, in a git worktree).
 access: write
 agent: opencode
-isolation: worktree
 timeout_min: 30
 ---
 You are the EXECUTOR. Implement the plan below.

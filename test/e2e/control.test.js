@@ -158,26 +158,3 @@ test('inputs are validated: unknown or unfinished runs, missing plans, wrong ten
   await slow.call('cancel', { run_id });
   await slow.close();
 });
-
-test('a read tentacle with reuse_session_min continues its warm agent session; others start fresh', async () => {
-  const first = await k.wait((await k.call('explain', { area: 'the scheduler', cwd: h.repo, session: 'warm' })).run_id);
-  assert.equal(first.reused_session_of, undefined);
-  assert.ok(!h.argsLog().at(-1).includes('--session'), 'the first run starts a new agent session');
-
-  const started = await k.call('explain', { area: 'the store', cwd: h.repo, session: 'warm' });
-  assert.equal(started.reused_session_of, first.id);
-  const second = await k.wait(started.run_id);
-  assert.equal(second.status, 'done');
-  assert.ok(h.argsLog().at(-1).includes('--session ses_stub1'), 'explain (reuse_session_min 5) resumed the agent session');
-  assert.ok(h.argsLog().at(-1).includes('AREA: the store'), 'with the new task');
-
-  await k.wait((await k.call('explain', { area: 'x', cwd: h.repo, session: 'other' })).run_id);
-  assert.ok(!h.argsLog().at(-1).includes('--session'), 'another session label starts fresh');
-  await k.wait((await k.call('plan', { task: 'y', cwd: h.repo, session: 'warm' })).run_id);
-  await k.wait((await k.call('plan', { task: 'z', cwd: h.repo, session: 'warm' })).run_id);
-  assert.ok(!h.argsLog().at(-1).includes('--session'), 'plan has no reuse window by default');
-  h.cli('set', 'explain', 'reuse_session_min=0');
-  await k.wait((await k.call('explain', { area: 'w', cwd: h.repo, session: 'warm' })).run_id);
-  assert.ok(!h.argsLog().at(-1).includes('--session'), 'reuse_session_min 0 turns it off');
-  h.cli('reset', 'explain');
-});

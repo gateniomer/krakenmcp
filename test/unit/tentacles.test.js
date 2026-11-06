@@ -1,4 +1,4 @@
-// Unit tests for tentacle settings: layering, validation, tentacle files, prompt rendering.
+// Unit tests for tentacle settings: tentacle files, layering, validation, prompt rendering.
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -13,7 +13,11 @@ mkdirSync(repo);
 let T;
 before(async () => { T = await import('../../src/tentacles.js'); });
 
-const cfg = (args) => T.configureTentacle({ cwd: repo, actor: 'test', ...args });
+// Write (or with text null, remove) a tentacle file in the developer's data dir.
+const file = (name, text) => {
+  const dir = T.userDir(); mkdirSync(dir, { recursive: true });
+  if (text === null) rmSync(join(dir, `${name}.md`), { force: true }); else writeFileSync(join(dir, `${name}.md`), text);
+};
 
 test('built-ins resolve with sources', () => {
   const t = T.resolveTentacle('think', repo);
@@ -23,14 +27,12 @@ test('built-ins resolve with sources', () => {
   assert.equal(t.builtin, true);
 });
 
-test('layers: repo beats global, call beats repo', () => {
-  cfg({ name: 'plan', scope: 'global', set: { effort: 'low' } });
-  cfg({ name: 'plan', scope: 'repo', set: { effort: 'medium' } });
+test('layers: user file beats built-in, call beats user file', () => {
+  file('plan', '---\neffort: medium\n---\n');
   assert.equal(T.resolveTentacle('plan', repo).settings.effort, 'medium');
-  assert.equal(T.resolveTentacle('plan', repo).sources.effort, 'repo');
+  assert.equal(T.resolveTentacle('plan', repo).sources.effort, 'user file');
   assert.equal(T.resolveTentacle('plan', repo, { effort: 'high' }).settings.effort, 'high');
-  cfg({ name: 'plan', scope: 'repo', reset: true });
-  cfg({ name: 'plan', scope: 'global', reset: true });
+  file('plan', null);
 });
 
 test('changing the agent resets model and effort to that agent\'s defaults', () => {
@@ -41,30 +43,23 @@ test('changing the agent resets model and effort to that agent\'s defaults', () 
   assert.match(t.sources.model, /agent changed/);
 });
 
-test('read access forces isolation none', () => {
-  cfg({ name: 'explain', set: { isolation: 'worktree' } });
-  const t = T.resolveTentacle('explain', repo);
-  assert.equal(t.settings.isolation, 'none');
-  assert.equal(t.sources.isolation, 'forced (read access)');
-  cfg({ name: 'explain', reset: true });
-});
-
 test('validation rejects unknown fields and bad values', () => {
-  assert.throws(() => cfg({ name: 'plan', set: { colour: 'red' } }), /Unknown field/);
-  assert.throws(() => cfg({ name: 'plan', set: { access: 'admin' } }), /access must be one of/);
-  assert.throws(() => cfg({ name: 'plan', set: { timeout_min: 999 } }), /timeout_min/);
-  assert.throws(() => cfg({ name: 'plan', set: { reuse_session_min: 500 } }), /reuse_session_min/);
-  assert.throws(() => cfg({ name: 'Bad Name', set: {} }), /name must be/);
+  assert.throws(() => T.parseTentacleFile('---\ncolour: red\n---\n'), /Unknown field/);
+  assert.throws(() => T.parseTentacleFile('---\naccess: admin\n---\n'), /access must be one of/);
+  assert.throws(() => T.parseTentacleFile('---\ntimeout_min: 999\n---\n'), /timeout_min/);
+  assert.throws(() => T.resolveTentacle('think', repo, { effort: 5 }), /effort must be/);
   assert.throws(() => T.resolveTentacle('nope', repo), /Unknown tentacle/);
 });
 
 test('custom tentacles need a prompt', () => {
-  assert.throws(() => cfg({ name: 'audit', set: { access: 'read' } }), /needs a prompt/);
-  cfg({ name: 'audit', set: { prompt: 'Audit {{task}}' } });
+  file('audit', '---\naccess: read\n---\n');
+  assert.throws(() => T.resolveTentacle('audit', repo), /has no prompt/);
+  file('audit', '---\naccess: read\n---\nAudit {{task}}\n');
   const t = T.resolveTentacle('audit', repo);
   assert.equal(t.builtin, false);
   assert.equal(t.settings.access, 'read');
   assert.ok(T.knownNames(repo).includes('audit'));
+  file('audit', null);
 });
 
 test('needs_plan / needs_diff come from the prompt placeholders', () => {
@@ -103,25 +98,21 @@ test('tentacle files: header values are typed, the body is the prompt, bad files
 });
 
 test('built-in tentacles are loaded from src/tentacles/*.md', () => {
-  assert.deepEqual(Object.keys(T.BUILTIN).sort(), ['execute', 'explain', 'plan', 'review', 'think']);
+  assert.deepEqual(Object.keys(T.BUILTIN).sort(), ['execute', 'explain', 'plan', 'research', 'review', 'think']);
   assert.equal(T.BUILTIN.execute.access, 'write');
   assert.equal(T.BUILTIN.execute.max_tokens, null, 'fields a file leaves out get the defaults');
   assert.match(T.BUILTIN.review.prompt, /^You are the REVIEWER[\s\S]*\{\{diff\}\}$/);
 });
 
-test('a user tentacle file sits between built-ins and global settings', () => {
+test('a user tentacle file can override only some fields; bad file names are reported', () => {
   const dir = T.userDir();
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'plan.md'), '---\neffort: low\n---\n');
   writeFileSync(join(dir, 'Bad Name.md'), '---\n---\nx');
-  let t = T.resolveTentacle('plan', repo);
+  const t = T.resolveTentacle('plan', repo);
   assert.equal(t.settings.effort, 'low');
   assert.equal(t.sources.effort, 'user file');
   assert.equal(t.sources.prompt, 'built-in', 'a file can override only some fields');
   assert.match(T.userTentacles().problems[0], /file name must be/);
-  cfg({ name: 'plan', scope: 'global', set: { effort: 'high' } });
-  t = T.resolveTentacle('plan', repo);
-  assert.equal(t.sources.effort, 'global');
-  cfg({ name: 'plan', scope: 'global', reset: true });
   rmSync(dir, { recursive: true });
 });

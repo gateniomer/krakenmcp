@@ -1,38 +1,26 @@
 #!/usr/bin/env node
-// Developer CLI. The only place settings are stored: MCP clients can read them, never change them.
+// Developer CLI. Tentacle settings live in ~/.kraken/tentacles/*.md; MCP clients can read them, never change them.
 //
 //   krakenmcp list                          [--cwd <repo>]
-//   krakenmcp set <name> key=value ...      [--global] [--cwd <repo>]
-//   krakenmcp unset <name> key ...          [--global] [--cwd <repo>]
-//   krakenmcp reset <name>                  [--global] [--cwd <repo>]
-//   krakenmcp log
+//   krakenmcp edit <name>                   open ~/.kraken/tentacles/<name>.md (created if missing), then check it
+//   krakenmcp remove <name>                 delete that file: your tentacle is gone, a built-in is back to its defaults
 //   krakenmcp doctor                        check installed agent CLIs (exit 1 if a tentacle needs a missing one)
 //   krakenmcp limit [n]                     show/set max parallel runs (default 3)
 //   krakenmcp prune [--older-than 30] [--dry-run] [--worktrees]
 //        delete logs/result files and stored prompts of runs finished more than N days ago; list
 //        unmerged worktrees (--worktrees also discards the stale ones)
-//   krakenmcp budget [usd|off]              show/set the daily spend limit; new runs are refused past it
 //   krakenmcp mode [ask|auto]               show/set approval: auto merges approved, verified, conflict-free branches
-//   krakenmcp export [name ...] [--global] [--out file]   tentacle settings as JSON (the repo-file format)
-//   krakenmcp import <file> [--global]      load tentacle settings from an export
-//   krakenmcp trust | untrust               use (or stop using) this repo's .kraken/tentacles.json
-//   krakenmcp about                         [--cwd <repo>]   (what Kraken is, with the ASCII kraken)
 //   krakenmcp show [run_id] [--open|--log]  a run's full result (default: the newest run with one);
 //        --open opens the result file in $VISUAL / $EDITOR, --log prints the raw agent output
-//
-// Values are parsed as JSON when possible (null, numbers, true/false), otherwise kept as strings:
-//   krakenmcp set plan agent=claude model=opus effort=high --global
-//   krakenmcp set execute verify="npm test && npm run lint" --cwd ~/code/my-app
 import './quiet.js';
 import { resolve, join } from 'node:path';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { configureTentacle, knownNames, resolveTentacle, exportTentacles, importTentacles, trustRepoFile, repoFile } from './tentacles.js';
-import { ROOT, PLANS_DIR, LOGS_DIR, db, getRun, configChanges, setSetting, spentToday } from './store.js';
-import { maxParallel, dailyBudget } from './scheduler.js';
+import { knownNames, resolveTentacle, NAME, userDir, userTentacles, tentacleTemplate, BUILTIN } from './tentacles.js';
+import { PLANS_DIR, LOGS_DIR, db, getRun, setSetting } from './store.js';
+import { maxParallel } from './scheduler.js';
 import { approvalMode } from './branches.js';
 import { pruneData } from './prune.js';
-import { aboutText } from './about.js';
 import { checkAgents } from './agents.js';
 import { agentReport } from './runs.js';
 
@@ -40,17 +28,10 @@ const argv = process.argv.slice(2);
 const flag = (f) => { const i = argv.indexOf(f); if (i < 0) return false; argv.splice(i, 1); return true; };
 const opt = (f) => { const i = argv.indexOf(f); if (i < 0) return null; const v = argv[i + 1]; argv.splice(i, 2); return v; };
 
-const scope = flag('--global') ? 'global' : 'repo';
-const outFile = opt('--out');
 const openIt = flag('--open'), showLog = flag('--log');
-// `npm run config` from a source checkout changes into the package folder; only then is INIT_CWD
-// (the folder npm was started from) the right repo. Anywhere else, use the real working directory.
-const fromPackageScript = process.cwd() === ROOT && process.env.INIT_CWD;
-const cwd = resolve(opt('--cwd') ?? (fromPackageScript ? process.env.INIT_CWD : process.cwd()));
-const [cmd, name, ...rest] = argv;
-const value = (v) => { try { return JSON.parse(v); } catch { return v; } };
+const cwd = resolve(opt('--cwd') ?? process.cwd());
+const [cmd, name] = argv;
 const out = (o) => console.log(JSON.stringify(o, null, 2));
-const base = { name, scope, cwd, actor: 'cli:developer' };
 
 try {
   switch (cmd) {
@@ -60,24 +41,43 @@ try {
         return { name: n, settings: { ...t.settings, prompt: `${t.settings.prompt.slice(0, 60)}…` }, sources: t.sources };
       }));
       break;
-    case 'set': {
-      const set = Object.fromEntries(rest.map((kv) => {
-        const i = kv.indexOf('=');
-        if (i < 1) throw new Error(`expected key=value, got "${kv}"`);
-        return [kv.slice(0, i), value(kv.slice(i + 1))];
-      }));
-      out(configureTentacle({ ...base, set }));
+    case 'edit': {
+      // krakenmcp edit <name>: your tentacle file for <name> (a built-in or your own), in $VISUAL / $EDITOR
+      if (!name || !NAME.test(name)) throw new Error('usage: krakenmcp edit <name> (lowercase letters, digits, - or _)');
+      const file = join(userDir(), `${name}.md`);
+      const created = !existsSync(file);
+      if (created) { mkdirSync(userDir(), { recursive: true }); writeFileSync(file, tentacleTemplate(name)); }
+      const editor = process.env.VISUAL || process.env.EDITOR;
+      if (editor) {
+        const r = spawnSync(`${editor} "${file}"`, { stdio: 'inherit', shell: true });
+        if (r.error || r.status) throw new Error(`the editor exited with an error${r.error ? `: ${r.error.message}` : ''}`);
+      }
+      const problem = userTentacles().problems.find((p) => p.startsWith(file));
+      if (problem) { out({ file, problem: problem.slice(file.length + 2) }); process.exitCode = 1; break; }
+      const t = resolveTentacle(name, cwd);
+      out({ file, created: created || undefined,
+        note: editor ? undefined : 'Set $VISUAL or $EDITOR to open it automatically; edit the file, then run this again to check it.',
+        settings: { ...t.settings, prompt: `${t.settings.prompt.slice(0, 60)}…` }, sources: t.sources });
       break;
     }
-    case 'unset': out(configureTentacle({ ...base, unset: rest })); break;
-    case 'reset': out(configureTentacle({ ...base, reset: true })); break;
-    case 'log': out(configChanges(30)); break;
+    case 'remove': {
+      // krakenmcp remove <name>: delete your tentacle file (built-ins cannot be removed, only reset)
+      if (!name || !NAME.test(name)) throw new Error('usage: krakenmcp remove <name>');
+      const file = join(userDir(), `${name}.md`);
+      if (!existsSync(file)) {
+        throw new Error(BUILTIN[name] ? `${name} has no changes to remove; it is already the built-in`
+          : `no tentacle ${name} (no ${file})`);
+      }
+      rmSync(file);
+      out({ removed: file, note: BUILTIN[name] ? `${name} is back to the built-in settings and prompt` : `${name} is gone` });
+      break;
+    }
     case 'limit': {
       // krakenmcp limit [n]: show or set how many runs may run at once (others wait as queued)
       if (name !== undefined) {
         const n = Number(name);
         if (!Number.isInteger(n) || n < 1 || n > 32) throw new Error('limit must be an integer from 1 to 32');
-        setSetting('max_parallel', n, 'cli:developer');
+        setSetting('max_parallel', n);
       }
       out({ max_parallel: maxParallel() });
       break;
@@ -102,22 +102,11 @@ try {
       process.exitCode = rep.problems.length ? 1 : 0;
       break;
     }
-    case 'budget': {
-      // krakenmcp budget [usd|off]: daily spend limit across all runs (local midnight to midnight)
-      if (name !== undefined) {
-        const v = name === 'off' ? null : Number(name);
-        if (v !== null && !(v > 0)) throw new Error('budget takes a positive amount in USD, or "off"');
-        setSetting('daily_budget_usd', v, 'cli:developer', 'budget');
-      }
-      out({ daily_budget_usd: dailyBudget(), spent_today_usd: Number(spentToday().toFixed(4)),
-        note: 'Agents that report no cost (codex, cursor) do not count toward it.' });
-      break;
-    }
     case 'mode': {
       // krakenmcp mode [ask|auto]: whether merge asks the developer (default) or lands approved work by itself
       if (name !== undefined) {
         if (!['ask', 'auto'].includes(name)) throw new Error('mode is "ask" or "auto"');
-        setSetting('approval_mode', name === 'auto' ? 'auto' : null, 'cli:developer', 'mode');
+        setSetting('approval_mode', name === 'auto' ? 'auto' : null);
       }
       out({ approval_mode: approvalMode(),
         note: approvalMode() === 'auto'
@@ -126,27 +115,6 @@ try {
           : 'merge(run_id) shows a preview; it merges only after you approve it.' });
       break;
     }
-    case 'export': {
-      const bundle = exportTentacles({ scope, cwd, names: [name, ...rest].filter(Boolean) });
-      const json = `${JSON.stringify(bundle, null, 2)}\n`;
-      if (outFile) { writeFileSync(outFile, json); console.error(`wrote ${Object.keys(bundle.tentacles).length} tentacle(s) to ${outFile}`); }
-      else process.stdout.write(json);
-      break;
-    }
-    case 'import': {
-      if (!name) throw new Error('usage: krakenmcp import <file> [--global]');
-      const res = importTentacles({ bundle: JSON.parse(readFileSync(name, 'utf8')), scope, cwd, actor: 'cli:developer' });
-      out(res);
-      if (res.some((r) => !r.imported)) process.exitCode = 1;
-      break;
-    }
-    case 'trust': {
-      const f = repoFile(cwd);
-      out({ ...trustRepoFile(cwd, 'cli:developer', true), tentacles: repoFile(cwd).names ?? f.names,
-        note: 'Trusted as it is now. Any change to the file needs `krakenmcp trust` again.' });
-      break;
-    }
-    case 'untrust': out(trustRepoFile(cwd, 'cli:developer', false)); break;
     case 'show': {
       const run = name ? getRun(name)
         : db.prepare("SELECT * FROM runs WHERE result IS NOT NULL AND result != '' ORDER BY created_at DESC LIMIT 1").get();
@@ -159,7 +127,7 @@ try {
         if (!existsSync(file)) throw new Error(`run ${run.id} has no result file; use krakenmcp show ${run.id}`);
         const editor = process.env.VISUAL || process.env.EDITOR;
         const r = editor ? spawnSync(`${editor} "${file}"`, { stdio: 'inherit', shell: true })
-          : spawnSync(process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer' : 'xdg-open', [file], { stdio: 'inherit' });
+          : spawnSync(process.platform === 'darwin' ? 'open' : 'xdg-open', [file], { stdio: 'inherit' });
         if (r.error || (editor && r.status)) throw new Error(`could not open ${file}${r.error ? `: ${r.error.message}` : ''}`);
       } else {
         const body = existsSync(file) ? readFileSync(file, 'utf8') : run.result;
@@ -170,10 +138,9 @@ try {
       }
       break;
     }
-    case 'about': console.log(aboutText({ cwd, color: process.stdout.isTTY })); break;
     default:
-      console.log('usage: krakenmcp about|doctor|show|list|set|unset|reset|limit|budget|mode|prune|log|export|import|trust|untrust ' +
-        '[name] [key=value ...] [--global] [--cwd <repo>]');
+      console.log('usage: krakenmcp doctor|show|list|edit|remove|limit|mode|prune ' +
+        '[args] [--cwd <repo>]');
       process.exit(cmd ? 1 : 0);
   }
 } catch (e) {

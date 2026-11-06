@@ -1,10 +1,8 @@
 ---
-description: Explain how a part of the codebase works as a one-page map (read-only), so the caller does not have to read many files itself.
+description: Explain how a part of the codebase works as a one-page map (read-only), so the head does not have to read many files itself.
 access: read
 agent: opencode
-isolation: none
 timeout_min: 15
-reuse_session_min: 5
 ---
 You are the GUIDE. Explain how the area below works in this repository, for an engineer about to change it.
 Read the code; do not guess. Keep it to about one page of Markdown with these sections:

@@ -1,18 +1,13 @@
 // Tentacles: named actions (plan, execute, or custom) with layered settings.
-// Resolution order, last wins: built-in -> global -> repo -> call arguments.
-// A repository can also check in .kraken/tentacles.json (the `krakenmcp export` format) for its team.
-// That file can set `verify` (a shell command) and prompts, so it is only used after the developer
-// trusts it (`krakenmcp trust`), which records the file's hash; any change needs trusting again.
-// Tentacles are also .md files: built-ins in src/tentacles/, the developer's own in ~/.kraken/tentacles/,
-// a repo's in .kraken/tentacles/ (trusted like the JSON file).
-// Full order: built-in -> user file -> global -> repo files (trusted) -> repo -> call arguments.
+// Tentacles are .md files: built-ins in src/tentacles/, the developer's own in ~/.kraken/tentacles/.
+// Resolution order, last wins: built-in -> user file -> call arguments (agent/model/effort only).
+// Only the developer changes settings, by editing files; MCP clients can override per call.
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGENTS } from './agents.js';
-import { DATA_DIR, getTentacleRow, tentacleRows, saveTentacleRow, deleteTentacleRow, getSetting, setSetting } from './store.js';
+import { DATA_DIR } from './store.js';
 
 export const FIELDS = {
   description: 'string',
@@ -21,18 +16,16 @@ export const FIELDS = {
   model: 'string|null',      // null = the agent's default model
   effort: 'string|null',
   prompt: 'string',          // template: {{task}} {{plan}} {{context}} {{diff}} {{workdir}} {{repo}}
-  isolation: ['worktree', 'none'],
   verify: 'string|null',     // shell command Kraken runs after a write tentacle
   timeout_min: 'number',
   max_cost_usd: 'number|null', // stop the run when its cost passes this (agents that report cost)
   max_tokens: 'number|null',   // stop the run when input + output + reasoning tokens pass this
-  reuse_session_min: 'number|null', // read tentacles: continue the same tentacle's agent session if it finished this recently
 };
 
 // Defaults for every tentacle file; a custom tentacle must set at least `prompt`.
 const CUSTOM_BASE = {
   description: '', access: 'read', agent: 'opencode', model: null, effort: null,
-  isolation: 'none', verify: null, timeout_min: 30, max_cost_usd: null, max_tokens: null, reuse_session_min: null,
+  verify: null, timeout_min: 30, max_cost_usd: null, max_tokens: null,
 };
 
 // ---- tentacle files: <name>.md with a "---" settings header, then the prompt ----
@@ -45,7 +38,7 @@ const CUSTOM_BASE = {
 //   You are the AUDITOR. ... {{task}}
 //
 // Header values are parsed as JSON when possible (null, numbers, true/false), otherwise kept as strings.
-const NAME = /^[a-z][a-z0-9_-]{0,31}$/;
+export const NAME = /^[a-z][a-z0-9_-]{0,31}$/;
 const headerValue = (v) => { try { return JSON.parse(v); } catch { return v; } };
 
 export function parseTentacleFile(text) {
@@ -67,7 +60,8 @@ export function parseTentacleFile(text) {
 
 // Every <name>.md in dir: { tentacles: {name: settings}, problems: [..], files: [paths] }.
 // A broken file is skipped and reported; it never hides the other tentacles.
-export function loadTentacleDir(dir, files = readTentacleDir(dir)) {
+export function loadTentacleDir(dir) {
+  const files = readTentacleDir(dir);
   const out = { tentacles: {}, problems: [], files: files.map((f) => f.path) };
   for (const { name, path, text } of files) {
     if (!NAME.test(name)) { out.problems.push(`${path}: file name must be lowercase letters, digits, - or _ (max 32)`); continue; }
@@ -87,6 +81,23 @@ export const BUILTIN = Object.fromEntries(Object.entries(loadTentacleDir(BUILTIN
 export const userDir = () => join(DATA_DIR, 'tentacles');
 export const userTentacles = () => loadTentacleDir(userDir());
 
+// Starter text for `krakenmcp edit <name>`. For a built-in: every field commented out with its
+// current value, and no prompt (so the built-in prompt keeps getting Kraken's updates).
+// For a new tentacle: the required fields and a sample prompt.
+export function tentacleTemplate(name) {
+  const builtin = BUILTIN[name];
+  const fields = (s, skip = []) => Object.keys(FIELDS).filter((k) => k !== 'prompt' && !skip.includes(k))
+    .map((k) => `# ${k}: ${s[k] ?? null}`);
+  if (builtin) {
+    return ['---', `# Change only what you need: uncomment a line and edit its value. Built-in values for ${name}:`,
+      ...fields(builtin), '# To replace the built-in prompt, write your own below the closing ---.', '---', ''].join('\n');
+  }
+  return ['---', `description: What ${name} does, in one line`, 'access: read', `agent: ${CUSTOM_BASE.agent}`,
+    '# Optional (defaults shown):', ...fields(CUSTOM_BASE, ['description', 'access', 'agent']), '---',
+    `You are the ${name.toUpperCase()}. Describe the job and what your final message must contain.`, '',
+    'TASK: {{task}}', ''].join('\n');
+}
+
 // Fixed preamble per access level. Prompts can change what a tentacle does, not what it may do.
 const PREAMBLE = {
   read: 'You have READ-ONLY access. Do not create, edit or delete any files.',
@@ -104,8 +115,6 @@ export function repoRoot(cwd) {
   catch { return dir; }
 }
 
-export const scopeKey = (scope, cwd) => (scope === 'global' ? 'global' : `repo:${repoRoot(cwd)}`);
-
 function validate(settings) {
   for (const [k, v] of Object.entries(settings)) {
     const spec = FIELDS[k];
@@ -116,7 +125,6 @@ function validate(settings) {
     if (typeof v !== type) throw new Error(`${k} must be a ${spec}`);
     if (k === 'timeout_min' && !(v > 0 && v <= 240)) throw new Error('timeout_min must be between 0 and 240');
     if ((k === 'max_cost_usd' || k === 'max_tokens') && v !== null && !(v > 0)) throw new Error(`${k} must be a positive number or null`);
-    if (k === 'reuse_session_min' && v !== null && !(v >= 0 && v <= 120)) throw new Error('reuse_session_min must be 0-120 minutes or null');
   }
 }
 
@@ -134,124 +142,33 @@ function apply(merged, sources, layer, label) {
   }
 }
 
-// ---- repo files: .kraken/tentacles.json and .kraken/tentacles/*.md ----
-
-export const repoFilePath = (cwd) => join(repoRoot(cwd), '.kraken', 'tentacles.json');
-export const repoDirPath = (cwd) => join(repoRoot(cwd), '.kraken', 'tentacles');
-const sha = (text) => createHash('sha256').update(text).digest('hex');
-
-// Everything a repo checks in, read once: trust is a hash over exactly the text that gets parsed.
-// With only tentacles.json the hash is that file's own (so trust from older versions still holds).
-function repoSources(cwd) {
-  const path = repoFilePath(cwd), dir = repoDirPath(cwd);
-  const json = existsSync(path) ? readFileSync(path, 'utf8') : null;
-  const mds = readTentacleDir(dir);
-  const text = (json ?? '') + mds.map((f) => `\n--- ${f.name}.md\n${f.text}`).join('');
-  return { path, dir, json, mds, text, exists: json !== null || mds.length > 0 };
-}
-
-// { path, dir, exists, trusted, tentacles, names, problem }
-export function repoFile(cwd) {
-  const src = repoSources(cwd);
-  const where = [src.json !== null && src.path, src.mds.length && src.dir].filter(Boolean).join(' and ');
-  const base = { path: src.path, dir: src.mds.length ? src.dir : undefined };
-  if (!src.exists) return { ...base, exists: false, trusted: false, tentacles: {} };
-  const trusted = getSetting(`trust:${repoRoot(cwd)}`) === sha(src.text);
-  const problems = [];
-  let tentacles = {};
-  if (src.json !== null) {
-    try { tentacles = parseBundle(JSON.parse(src.json)); } catch (e) { problems.push(`${src.path} is invalid: ${e.message}`); }
-  }
-  const md = loadTentacleDir(src.dir, src.mds);
-  problems.push(...md.problems);
-  for (const [n, t] of Object.entries(md.tentacles)) {
-    if (n in tentacles) problems.push(`"${n}" is in both ${src.path} and ${src.dir}; the .md file wins`);
-    tentacles[n] = t;
-  }
-  if (!trusted) problems.unshift(`${where} ${src.json !== null && src.mds.length ? 'are' : 'is'} not trusted, so ` +
-    'ignored. Read it, then run: krakenmcp trust');
-  return { ...base, exists: true, trusted, tentacles: trusted ? tentacles : {}, names: Object.keys(tentacles),
-    problem: problems.length ? problems.join('; ') : undefined, invalid: problems.length > (trusted ? 0 : 1) };
-}
-
-export function trustRepoFile(cwd, actor, trust = true) {
-  const src = repoSources(cwd);
-  if (trust && !src.exists) throw new Error(`no ${src.path} or ${src.dir}/*.md`);
-  if (trust) {
-    const f = repoFile(cwd);
-    if (f.invalid) throw new Error(`refusing to trust invalid tentacle files: ${f.problem}`);
-  }
-  setSetting(`trust:${repoRoot(cwd)}`, trust ? sha(src.text) : null, actor, trust ? 'trust' : 'untrust');
-  return { path: src.path, dir: src.mds.length ? src.dir : undefined, trusted: trust };
-}
-
-// The export / import / repo-file format.
-export function parseBundle(obj) {
-  if (obj?.kraken_tentacles !== 1 || typeof obj.tentacles !== 'object' || !obj.tentacles) {
-    throw new Error('expected {"kraken_tentacles": 1, "tentacles": {"<name>": {settings}}}');
-  }
-  for (const [name, settings] of Object.entries(obj.tentacles)) {
-    if (!NAME.test(name)) throw new Error(`bad tentacle name "${name}"`);
-    try { validate(settings); } catch (e) { throw new Error(`${name}: ${e.message}`); }
-  }
-  return obj.tentacles;
-}
-
-export function exportTentacles({ scope = 'repo', cwd, names = [] }) {
-  const rows = tentacleRows([scopeKey(scope, cwd)]).filter((r) => !names.length || names.includes(r.name));
-  const missing = names.filter((n) => !rows.some((r) => r.name === n));
-  if (missing.length) throw new Error(`nothing stored for ${missing.join(', ')} at ${scopeKey(scope, cwd)}`);
-  return { kraken_tentacles: 1, tentacles: Object.fromEntries(rows.map((r) => [r.name, JSON.parse(r.settings)])) };
-}
-
-export function importTentacles({ bundle, scope = 'repo', cwd, actor }) {
-  const tentacles = parseBundle(bundle);
-  return Object.entries(tentacles).map(([name, set]) => {
-    try { configureTentacle({ name, scope, cwd, set, actor }); return { name, imported: true }; }
-    catch (e) { return { name, imported: false, error: e.message }; }
-  });
-}
-
 export function knownNames(cwd) {
-  const rows = tentacleRows(['global', scopeKey('repo', cwd)]);
-  const order = ['think', 'plan', 'execute', 'review', 'explain'];
-  return [...new Set([...order, ...Object.keys(BUILTIN), ...Object.keys(userTentacles().tentacles),
-    ...Object.keys(repoFile(cwd).tentacles), ...rows.map((r) => r.name)])];
+  const order = ['think', 'plan', 'execute', 'review', 'explain', 'research'];
+  return [...new Set([...order, ...Object.keys(BUILTIN), ...Object.keys(userTentacles().tentacles)])];
 }
 
 export function resolveTentacle(name, cwd, overrides = {}) {
   const root = repoRoot(cwd);
-  const globalRow = getTentacleRow('global', name);
-  const repoRow = getTentacleRow(`repo:${root}`, name);
   const builtin = BUILTIN[name];
-  const file = repoFile(cwd);
-  const fileLayer = file.tentacles[name];
   const userLayer = userTentacles().tentacles[name];
-  if (!builtin && !userLayer && !globalRow && !repoRow && !fileLayer) {
+  if (!builtin && !userLayer) {
     throw new Error(`Unknown tentacle "${name}". Known: ${knownNames(cwd).join(', ')}`);
   }
   const merged = {}, sources = {};
   apply(merged, sources, builtin ?? CUSTOM_BASE, builtin ? 'built-in' : 'custom default');
   apply(merged, sources, userLayer, 'user file');
-  apply(merged, sources, globalRow && JSON.parse(globalRow.settings), 'global');
-  apply(merged, sources, fileLayer, 'repo file');
-  apply(merged, sources, repoRow && JSON.parse(repoRow.settings), 'repo');
   const call = Object.fromEntries(Object.entries(overrides).filter(([, v]) => v !== undefined));
   validate(call);
   apply(merged, sources, call, 'call');
 
-  if (!merged.prompt) throw new Error(`Tentacle "${name}" has no prompt; set one with krakenmcp set or a tentacle file.`);
+  if (!merged.prompt) throw new Error(`Tentacle "${name}" has no prompt; add one in ${join(userDir(), `${name}.md`)}.`);
   if (merged.model == null) {
     merged.model = AGENTS[merged.agent].defaultModel[merged.access === 'read' ? 'plan' : 'execute'];
     sources.model = `${sources.model ?? 'built-in'} → agent default`;
   }
-  if (merged.access === 'read' && merged.isolation !== 'none') {
-    merged.isolation = 'none'; sources.isolation = 'forced (read access)';
-  }
   return {
     name, repo: root, builtin: !!builtin, settings: merged, sources,
     user_file: userLayer ? join(userDir(), `${name}.md`) : undefined,
-    repo_file: file.exists ? { path: file.path, dir: file.dir, trusted: file.trusted, problem: file.problem } : undefined,
     needs_plan: merged.prompt.includes('{{plan}}'),
     needs_diff: merged.prompt.includes('{{diff}}'),
   };
@@ -277,34 +194,4 @@ export function formatContext(runs) {
     'Earlier results to build on (treat as input, verify against the code where it matters):',
     ...runs.map((r) => `\n--- CONTEXT: ${r.tentacle} run ${r.id} (${r.agent} ${r.model ?? ''}) ---\n${r.result}`),
   ].join('\n');
-}
-
-// Stored settings (krakenmcp set / unset / reset / import). Only the developer CLI changes settings:
-// MCP clients can override agent/model/effort per call, never store anything.
-export function configureTentacle({ name, scope = 'repo', cwd, set = {}, unset = [], reset = false, actor }) {
-  if (!NAME.test(name)) throw new Error('name must be lowercase letters, digits, - or _ (max 32)');
-  const key = scopeKey(scope, cwd);
-  const row = getTentacleRow(key, name);
-  const before = row ? { settings: JSON.parse(row.settings) } : null;
-
-  if (reset) {
-    if (!row) return { scope: key, name, changed: false, note: 'nothing set at this scope' };
-    deleteTentacleRow({ scope: key, name, actor, before });
-    return { scope: key, name, changed: true, reset: true, resolved: safeResolve(name, cwd) };
-  }
-
-  validate(set);
-  const settings = { ...(before?.settings ?? {}), ...set };
-  for (const k of unset) delete settings[k];
-  if (!BUILTIN[name] && !userTentacles().tentacles[name] && !getTentacleRow(key === 'global' ? `repo:${repoRoot(cwd)}` : 'global', name)
-      && !repoFile(cwd).tentacles[name] && !settings.prompt) {
-    throw new Error(`New tentacle "${name}" needs a prompt.`);
-  }
-  saveTentacleRow({ scope: key, name, settings, actor, action: 'set', before });
-  return { scope: key, name, changed: true, stored: { settings }, resolved: safeResolve(name, cwd) };
-}
-
-function safeResolve(name, cwd) {
-  try { const t = resolveTentacle(name, cwd); return { settings: t.settings, sources: t.sources }; }
-  catch (e) { return { error: e.message }; }
 }

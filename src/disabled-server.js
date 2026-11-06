@@ -1,6 +1,6 @@
 // The MCP server a nested Kraken (inside a Kraken run) starts instead of the real one: no tools.
 import { createServer } from './mcp.js';
-import { VERSION } from './about.js';
+import { VERSION } from './store.js';
 
 export function startDisabled(parentRun) {
   createServer({

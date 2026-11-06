@@ -1,6 +1,6 @@
 // Shared setup for end-to-end tests: a throwaway git repo and data dir per test file, the stub
 // agent on PATH, and an MCP client that starts the real server through the `krakenmcp` entry point.
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,8 +23,6 @@ export function setup() {
     KRAKEN_DATA: join(root, 'data'),
     STUB_NODE: process.execPath, // the stub's shim must find node even when a test narrows PATH
     STUB_ARGS_LOG: join(root, 'args.log'),
-    // npm sets INIT_CWD; krakenmcp must not mistake it for the repo (only `npm run` inside the package may)
-    INIT_CWD: root,
     // merge commits need an identity; CI machines have none
     GIT_AUTHOR_NAME: 'kraken-test', GIT_AUTHOR_EMAIL: 'test@example.com',
     GIT_COMMITTER_NAME: 'kraken-test', GIT_COMMITTER_EMAIL: 'test@example.com',
@@ -38,12 +36,25 @@ export function setup() {
 
   const cli = (...a) => execFileSync(process.execPath, [join(SRC, 'bin.js'), ...a],
     { encoding: 'utf8', env, cwd: repo, stdio: ['ignore', 'pipe', 'pipe'] });
-  // Claude Code may not be installed: point the tentacles that default to it at the stub.
-  for (const t of ['think', 'plan', 'review']) cli('set', t, 'agent=opencode', '--global');
+  // Tentacle files in the data dir, as a developer would write them. Claude Code may not be
+  // installed: the base files point the tentacles that default to it at the stub.
+  // tentacle(name, {settings, prompt?}) writes the file over the base; tentacle(name, null) restores it.
+  const BASE = { think: { agent: 'opencode' }, plan: { agent: 'opencode' }, review: { agent: 'opencode' },
+    research: { agent: 'opencode' } };
+  const tentacleDir = join(env.KRAKEN_DATA, 'tentacles');
+  mkdirSync(tentacleDir, { recursive: true });
+  const tentacle = (name, settings) => {
+    const file = join(tentacleDir, `${name}.md`);
+    const all = settings === null ? BASE[name] : { ...BASE[name], ...settings };
+    if (!all) { rmSync(file, { force: true }); return; }
+    const { prompt = '', ...header } = all;
+    writeFileSync(file, `---\n${Object.entries(header).map(([k, v]) => `${k}: ${v}`).join('\n')}\n---\n${prompt}\n`);
+  };
+  for (const t of Object.keys(BASE)) tentacle(t, null);
 
   let db;
   const h = {
-    root, repo, env, git, cli,
+    root, repo, env, git, cli, tentacle,
     db: () => (db ??= new DatabaseSync(join(env.KRAKEN_DATA, 'kraken.db'))),
     row: (id) => h.db().prepare('SELECT * FROM runs WHERE id = ?').get(id),
     argsLog: () => (existsSync(env.STUB_ARGS_LOG) ? readFileSync(env.STUB_ARGS_LOG, 'utf8').trim().split('\n') : []),

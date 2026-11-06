@@ -1,7 +1,8 @@
-// End to end: settings (CLI) and how MCP sees them, the change log, about, show, and prune.
+// End to end: settings (tentacle files) and how MCP sees them, the CLI, show, and prune.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { setup } from './helpers.js';
 
@@ -16,65 +17,81 @@ const cliFails = (...a) => {
 
 test('tentacles shows resolved settings with their sources, installed agents and limits', async () => {
   const t = await k.call('tentacles', { cwd: h.repo });
-  assert.deepEqual(t.tentacles.map((x) => x.name), ['think', 'plan', 'execute', 'review', 'explain']);
+  assert.deepEqual(t.tentacles.map((x) => x.name), ['think', 'plan', 'execute', 'review', 'explain', 'research']);
   const think = t.tentacles.find((x) => x.name === 'think');
   assert.equal(think.settings.agent, 'opencode');
-  assert.equal(think.sources.agent, 'global');
+  assert.equal(think.sources.agent, 'user file');
   assert.equal(think.settings.effort, null, 'agent changed, so Claude-only effort was reset');
   assert.equal(t.agents.find((a) => a.name === 'opencode').installed, true);
-  assert.deepEqual(t.limits, { max_parallel: 3, daily_budget_usd: null, spent_today_usd: 0, approval_mode: 'ask' });
+  assert.deepEqual(t.limits, { max_parallel: 3, approval_mode: 'ask' });
   assert.ok(t.tentacles.every((x) => x.settings.prompt.length <= 160), 'prompts are clipped unless asked for');
   const full = await k.call('tentacles', { cwd: h.repo, show_prompts: true });
   assert.match(full.tentacles[0].settings.prompt, /Open questions/);
 });
 
-test('settings set with the CLI apply to MCP runs; MCP clients cannot store settings', async () => {
-  const r = json(h.cli('set', 'execute', 'verify=npm test'));
-  assert.equal(r.resolved.settings.verify, 'npm test');
-  assert.equal(r.resolved.sources.verify, 'repo');
+test('tentacle files apply to MCP runs; MCP clients cannot store settings', async () => {
+  h.tentacle('execute', { verify: 'npm test' });
+  const execute = json(h.cli('list')).find((t) => t.name === 'execute');
+  assert.equal(execute.settings.verify, 'npm test');
+  assert.equal(execute.sources.verify, 'user file');
 
-  h.cli('set', 'audit', 'prompt=Audit {{task}} for secrets');
+  h.tentacle('audit', { prompt: 'Audit {{task}} for secrets' });
   const audit = await k.wait((await k.call('run', { tentacle: 'audit', input: 'math.js', cwd: h.repo })).run_id);
   assert.equal(audit.status, 'done');
   assert.equal(audit.access, 'read');
   assert.ok(h.argsLog().at(-1).includes('Audit math.js for secrets'));
 
-  const log = json(h.cli('log'));
-  assert.equal(log[0].actor, 'cli:developer');
-  assert.equal(log[0].name, 'audit');
   const tools = (await k.c.listTools()).tools.map((t) => t.name);
-  assert.ok(!tools.includes('configure_tentacle') && !tools.includes('about'), 'settings and the about page are CLI-only');
-  h.cli('reset', 'execute'); h.cli('reset', 'audit');
+  assert.ok(!tools.includes('configure_tentacle'), 'settings are the developer\'s');
+  h.tentacle('execute', null); h.tentacle('audit', null);
 });
 
-test('CLI: list, set with typed values, unset, reset, limit, and helpful errors', () => {
-  h.cli('set', 'plan', 'timeout_min=5', 'model=null');
+test('CLI: list with typed file values, limit, and helpful errors', () => {
+  h.tentacle('plan', { timeout_min: 5, model: null });
   const plan = json(h.cli('list')).find((t) => t.name === 'plan');
   assert.equal(plan.settings.timeout_min, 5, 'numbers are parsed');
-  assert.equal(plan.sources.timeout_min, 'repo');
-  h.cli('unset', 'plan', 'timeout_min');
+  assert.equal(plan.sources.timeout_min, 'user file');
+  h.tentacle('plan', null);
   assert.equal(json(h.cli('list')).find((t) => t.name === 'plan').sources.timeout_min, 'built-in');
-  h.cli('reset', 'plan');
 
   assert.deepEqual(json(h.cli('limit')), { max_parallel: 3 });
   assert.deepEqual(json(h.cli('limit', '2')), { max_parallel: 2 });
   h.cli('limit', '3');
 
-  assert.match(cliFails('set', 'plan', 'novalue'), /expected key=value/);
-  assert.match(cliFails('set', 'plan', 'colour=red'), /Unknown field/);
   assert.match(cliFails('limit', '0'), /integer from 1 to 32/);
   assert.match(cliFails('frobnicate'), /usage: krakenmcp/);
 });
 
-test('krakenmcp about shows the ASCII kraken with this repo\'s tentacles', () => {
-  const cli = h.cli('about');
-  assert.match(cli, /\(=O=\)/);
-  assert.match(cli, /think\s+read\s+opencode/);
-  assert.match(cli, /KrakenMCP v\d+\.\d+\.\d+/);
-  assert.doesNotMatch(cli, /\x1b\[/, 'no colors when stdout is not a terminal');
+test('krakenmcp edit creates a starter file, opens it in $VISUAL, and checks it', () => {
+  const edit = (name, extra = {}) => spawnSync(process.execPath, [new URL('../../src/bin.js', import.meta.url).pathname, 'edit', name],
+    { encoding: 'utf8', env: { ...h.env, VISUAL: 'true', ...extra }, cwd: h.repo });
+  const file = join(h.env.KRAKEN_DATA, 'tentacles', 'explain.md');
+  const r = edit('explain');
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(json(r.stdout).created, true);
+  assert.match(readFileSync(file, 'utf8'), /^# agent: opencode$/m, 'built-in values, commented out');
+  assert.equal(json(r.stdout).sources.prompt, 'built-in', 'no prompt in the file keeps the built-in one');
+
+  const custom = edit('lint');
+  assert.equal(json(custom.stdout).settings.access, 'read');
+  assert.equal(json(custom.stdout).sources.prompt, 'user file');
+  assert.ok(json(h.cli('list')).some((t) => t.name === 'lint'));
+
+  writeFileSync(file, '---\ncolour: red\n---\n');
+  const bad = edit('explain');
+  assert.equal(bad.status, 1);
+  assert.match(json(bad.stdout).problem, /Unknown field "colour"/);
+  assert.match(edit('Bad Name').stderr, /usage: krakenmcp edit/);
+
+  assert.match(h.cli('remove', 'explain'), /back to the built-in/);
+  assert.ok(!existsSync(file));
+  assert.match(cliFails('remove', 'explain'), /already the built-in/);
+  assert.match(h.cli('remove', 'lint'), /lint is gone/);
+  assert.ok(!json(h.cli('list')).some((t) => t.name === 'lint'));
+  assert.match(cliFails('remove', 'nope'), /no tentacle nope/);
 });
 
-test('a run\'s full result is readable with krakenmcp show and as a Markdown resource', async () => {
+test('a run\'s full result is readable with krakenmcp show', async () => {
   const r = await k.wait((await k.call('plan', { task: 'show me', cwd: h.repo })).run_id);
   assert.match(r.result_file, /plans\/.+\.md$/);
   const shown = h.cli('show', r.id);
@@ -87,10 +104,6 @@ test('a run\'s full result is readable with krakenmcp show and as a Markdown res
     { encoding: 'utf8', env: { ...h.env, VISUAL: 'ls' }, cwd: h.repo });
   assert.equal(opened.stdout.trim(), r.result_file, 'opens the result file in $VISUAL');
   assert.match(cliFails('show', 'nope'), /no run nope/);
-
-  const res = await k.c.readResource({ uri: `kraken://result/${r.id}` });
-  assert.equal(res.contents[0].mimeType, 'text/markdown');
-  assert.match(res.contents[0].text, /Done \(resumed=no\)\./);
 });
 
 test('prune: dry run changes nothing; a real run clears old files and stale worktrees but keeps history', async () => {

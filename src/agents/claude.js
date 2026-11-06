@@ -1,6 +1,6 @@
-// Flags checked against the Claude Code CLI reference (code.claude.com/docs/en/cli-reference);
-// not yet run against a real CLI. stream-json (needs --verbose in print mode) gives one event per
-// message, so tool calls can be counted and usage read while the run is going.
+// Flags from the Claude Code CLI reference (code.claude.com/docs/en/cli-reference). stream-json
+// (needs --verbose in print mode) gives one event per message, so tool calls can be counted and
+// usage read while the run is going.
 import { jsonLines, emptyTokens, countTools } from './util.js';
 
 export default {
@@ -22,7 +22,6 @@ export default {
     const events = jsonLines(stdout);
     // stream-json ends with a "result" event; plain --output-format json is that object alone.
     const result = events.findLast((e) => e.type === 'result' || (e.type === undefined && 'result' in e));
-    // One API response can arrive as several assistant events with the same message id and usage.
     // One API response arrives as several assistant events (one per content block) that share the
     // message id and repeat its usage: merge the blocks, count the usage once.
     const messages = new Map();
