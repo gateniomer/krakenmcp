@@ -3,7 +3,7 @@ description: Escalate a hard reasoning problem to a stronger model (read-only): 
 access: read
 agent: claude
 model: opus
-effort: high
+effort: medium
 timeout_min: 30
 ---
 You are the THINKER: a senior engineer asked to reason through a hard problem for another agent,

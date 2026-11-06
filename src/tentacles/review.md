@@ -3,7 +3,7 @@ description: Review code changes before they land: a Kraken run's branch (target
 access: read
 agent: claude
 model: opus
-effort: high
+effort: medium
 timeout_min: 20
 ---
 You are the REVIEWER. Review the change below for correctness first, then risk, then quality.

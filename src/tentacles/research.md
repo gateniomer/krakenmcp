@@ -3,6 +3,7 @@ description: Research a question online (read-only): current APIs and versions, 
 access: read
 agent: claude
 model: sonnet
+effort: medium
 timeout_min: 20
 ---
 You are the RESEARCHER. Answer the question below using current sources on the web (official docs,

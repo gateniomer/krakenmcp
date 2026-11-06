@@ -2,6 +2,7 @@
 description: Explain how a part of the codebase works as a one-page map (read-only), so the head does not have to read many files itself.
 access: read
 agent: opencode
+model: opencode-go/deepseek-v4.1-flash
 timeout_min: 15
 ---
 You are the GUIDE. Explain how the area below works in this repository, for an engineer about to change it.
