@@ -18,11 +18,12 @@ test('which finds executables on PATH only', () => {
 });
 
 test('opencode: read vs write mode, model, effort, resume', () => {
-  assert.deepEqual(opencode.build('plan', { prompt: 'P' }), ['run', '--format', 'json', '--agent', 'plan', 'P']);
+  assert.deepEqual(opencode.build('plan', { prompt: 'P' }),
+    ['run', '--standalone', '--format', 'json', '--agent', 'plan', 'P']);
   assert.deepEqual(opencode.build('execute', { prompt: 'P', model: 'prov/m', effort: 'high' }),
-    ['run', '--format', 'json', '-m', 'prov/m#high', '--auto', 'P']);
+    ['run', '--standalone', '--format', 'json', '-m', 'prov/m#high', '--auto', 'P']);
   assert.deepEqual(opencode.build('execute', { prompt: 'P', resumeSession: 'ses_1' }),
-    ['run', '--format', 'json', '--session', 'ses_1', '--auto', 'P']);
+    ['run', '--standalone', '--format', 'json', '--session', 'ses_1', '--auto', 'P']);
 });
 
 test('opencode: parse events into text, tokens, cost, steps, tool calls', () => {

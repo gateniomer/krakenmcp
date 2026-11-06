@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- A failed, timed-out or over-budget run (or a failed pipeline) returns `next` telling the head to stop
+  and report the error, and the server instructions forbid retrying on another agent or model on its own.
+
+### Fixed
+- OpenCode runs use `--standalone`, so they no longer fail when the developer's background
+  `opencode serve --service` holds the managed service port.
+
 ## [1.0.0] - 2026-11-06
 
 First public release.
