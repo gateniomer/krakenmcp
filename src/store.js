@@ -103,7 +103,7 @@ db.exec(`
   );
 `);
 
-// Columns added after 0.4.0: add them to databases created by older versions.
+// Columns added later: add them to databases created by older versions.
 function addColumns(table, cols) {
   const have = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name));
   for (const [name, type] of Object.entries(cols)) if (!have.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);

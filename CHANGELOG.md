@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [0.5.0] - Unreleased
+## [1.0.0] - 2026-11-06
 
 First public release.
 
@@ -28,6 +28,6 @@ First public release.
 - Metrics per run (time, tokens, cost, tool calls, diff size, verify) in `status`; totals per
   tentacle / agent / model in `session`, with what needs you.
 - Progress notifications while `status` waits.
-- CLI: `doctor`, `list`, `show`, `mode`, `limit`, `budget`, `prune`.
+- CLI: `doctor`, `list`, `edit`, `remove`, `show`, `mode`, `limit`, `prune`.
 - Nested-call guard: a Kraken started inside a Kraken run offers no tools.
 - Runs on macOS and Linux.

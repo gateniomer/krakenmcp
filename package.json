@@ -1,6 +1,6 @@
 {
   "name": "krakenmcp",
-  "version": "0.5.0",
+  "version": "1.0.0",
   "description": "MCP server that lets your coding agent delegate think / plan / execute / review work to other headless coding agents (Claude Code, Codex, Cursor, OpenCode, Aider).",
   "keywords": [
     "mcp",
@@ -15,7 +15,10 @@
     "orchestration"
   ],
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/gateniomer/kraken.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gateniomer/kraken.git"
+  },
   "homepage": "https://github.com/gateniomer/kraken#readme",
   "type": "module",
   "bin": {
