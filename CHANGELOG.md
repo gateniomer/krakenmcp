@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `status` takes `since` and returns `feed` (ready-made progress lines for the head to show the developer)
+  and `cursor`. While a run is in progress and `since` is given, the reply is compact.
+
 ## [1.0.0] - 2026-11-06
 
 First public release.

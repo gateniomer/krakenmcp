@@ -54,7 +54,7 @@ Any other MCP client that starts stdio servers works the same way.
 | `explain(area, …)` | One-page map of how part of the codebase works |
 | `run(tentacle, input?, plan_id?, context_runs?, …)` | Run any tentacle, including your own |
 | `pipeline(task, verify?, max_fix_rounds?, …)` | Plan -> execute -> review with fix rounds; stops before merge (unless approval mode is `auto`) |
-| `status(run_id, wait_seconds?, full?)` | Progress, result, metrics, verify result. Also takes a pipeline id |
+| `status(run_id, wait_seconds?, full?, since?)` | Progress, result, metrics, verify result. Also takes a pipeline id. With `since`, returns the live `feed` (see below) |
 | `resume(run_id, input)` | Answer a `waiting` run's question, or give a finished run a follow-up, in the same agent session and branch |
 | `cancel(run_id)` | Stop a queued or running run, or a pipeline |
 | `update(run_id, resolve?)` | Merge your current branch into the run's branch; the agent resolves conflicts |
@@ -75,6 +75,23 @@ Run statuses: `queued`, `running`, `done`, `failed`, `verify_failed`, `timeout`,
 Pipelines are `running`, `waiting`, `done`, `failed` or `cancelled`.
 
 While `status` waits it sends MCP progress notifications if the client passes a progress token.
+
+### Live feed
+
+`status` takes `since`, a cursor (a message id; start with `0`). It returns:
+
+- `feed`: ready-made lines for the progress made after `since`, which the head shows to the developer as
+  they are, e.g. `plan tentacle (claude opus): "Reading src/server.js…"`. Tool calls are folded into one
+  line (`  · tools: Read ×3, Grep`). Text is cut at 200 characters. At most 12 lines per reply; older ones
+  are replaced by `(+N earlier lines; full log: krakenmcp show <id>)`. In a pipeline the stage comes first
+  (`review › review tentacle (…)`) and one cursor covers every run.
+- `cursor`: pass it as `since` on the next call so no line repeats or is lost. `describe` output also
+  carries `cursor`.
+
+While the run or pipeline is in progress and `since` is given, the reply is compact: `id`, `status`,
+`stage` (pipelines), `elapsed_s`, `cost_usd`, `feed`, `cursor`, `next`. Once it ends (or is `waiting` on a
+question) the reply is the full one plus the last `feed` and `cursor`. Without `since` the reply is
+unchanged apart from `cursor`. Codex runs only show lifecycle lines.
 
 ## Tentacle fields and settings layers
 

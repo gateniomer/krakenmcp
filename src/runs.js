@@ -105,7 +105,9 @@ export function renderFeed(rows, labelOf) {
       lines[group.index] = group.attach ? `  · tools: ${list}` : `${label} · tools: ${list}`;
     } else {
       group = null;
-      if (m.kind === 'progress' && m.sender !== 'kraken') lines.push(`${label}: "${squash(m.body)}"`);
+      const lifecycle = m.kind === 'progress' && /^(started|resumed) /.exec(m.body);
+      if (lifecycle) lines.push(`${label}: ${lifecycle[1]}`);
+      else if (m.kind === 'progress' && m.sender !== 'kraken') lines.push(`${label}: "${squash(m.body)}"`);
       else if (m.kind === 'question') lines.push(`${label}: QUESTION: ${squash(m.body, 400)}`);
       else lines.push(`${label}: ${squash(m.body)}`);
     }
