@@ -8,11 +8,12 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { newId, nowIso, getRun, insertPipeline, getPipeline, updatePipeline, resumedBy, IN_PROGRESS } from './store.js';
+import { newId, nowIso, getRun, insertPipeline, getPipeline, updatePipeline, resumedBy, IN_PROGRESS,
+  pipelineMessagesSince, lastPipelineMessageId, pipelineRuns } from './store.js';
 import { startNode } from './scheduler.js';
 import { cancelRun, resumeRun } from './control.js';
 import { mergeRun, approvalMode } from './branches.js';
-import { startRun, describe, STOP_NEXT } from './runs.js';
+import { startRun, describe, runLabel, renderFeed, STOP_NEXT } from './runs.js';
 
 export const isPipelineId = (id) => typeof id === 'string' && id.startsWith('pipe_');
 
@@ -29,7 +30,7 @@ export function startPipeline({ task, cwd, session = 'default', verify, max_fix_
   insertPipeline({ id, session, task, cwd: dir, options: { verify, max_fix_rounds, context_runs, overrides } });
   updatePipeline(id, { pid: startNode('pipeline-driver.js', id) });
   return { pipeline_id: id, status: 'running', stage: 'plan',
-    next: `call status with run_id "${id}" and wait_seconds 50; the pipeline stops before merge` };
+    next: `call status with run_id "${id}" and wait_seconds 50 and since 0; the pipeline stops before merge` };
 }
 
 export function cancelPipeline(id) {
@@ -50,7 +51,35 @@ export function pipelineStatus(p) {
   return getRun(p.current_run)?.status === 'waiting' ? 'waiting' : 'running';
 }
 
-export function describePipeline(p, full = false) {
+// Stage names per run: plan, execute, review, "fix N" (resumed execute runs), "re-review" (later reviews).
+function stageNames(pid) {
+  const names = new Map();
+  let reviews = 0, fixes = 0;
+  for (const r of pipelineRuns(pid)) {
+    let answering = false;
+    try { answering = !!JSON.parse(r.config ?? '{}').answering; } catch { /* unreadable config */ }
+    if (answering && names.has(r.resumed_from)) names.set(r.id, names.get(r.resumed_from)); // just an answer: same stage
+    else if (r.tentacle === 'review') names.set(r.id, reviews++ ? 're-review' : 'review');
+    else if (r.tentacle === 'execute') names.set(r.id, r.resumed_from ? `fix ${++fixes}` : 'execute');
+    else names.set(r.id, r.tentacle);
+  }
+  return names;
+}
+
+// Feed lines for every run of a pipeline, one cursor for all of them.
+export function pipelineFeed(p, since = 0) {
+  const rows = pipelineMessagesSince(p.id, since);
+  const names = stageNames(p.id), runs = new Map();
+  const labelOf = (rid) => {
+    if (!runs.has(rid)) { const run = getRun(rid); runs.set(rid, run ? runLabel(run, names.get(rid)) : 'run'); }
+    return runs.get(rid);
+  };
+  const showId = p.current_run ?? p.exec_run ?? p.plan_run ?? rows.at(-1)?.run_id ?? p.id;
+  return { feed: renderFeed(rows, labelOf, showId),
+    cursor: rows.length ? rows.at(-1).id : Math.max(since, lastPipelineMessageId(p.id)) };
+}
+
+export function describePipeline(p, full = false, live) {
   const opts = JSON.parse(p.options);
   const cur = p.current_run ? getRun(p.current_run) : null;
   const status = pipelineStatus(p);
@@ -63,6 +92,7 @@ export function describePipeline(p, full = false) {
     question: waiting ? cur.question : undefined,
     result: p.result ? JSON.parse(p.result) : undefined,
     error: p.error ?? undefined,
+    ...live,
     next: waiting ? `ask the developer, then resume("${cur.id}", their reply); the pipeline continues by itself`
       : p.status === 'failed'
         ? STOP_NEXT

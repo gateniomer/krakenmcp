@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `status` takes `since` and returns `feed` (ready-made progress lines for the head to show the developer)
+  and `cursor`. While a run is in progress and `since` is given, the reply is compact.
+
 ### Changed
 - A failed, timed-out or over-budget run (or a failed pipeline) returns `next` telling the head to stop
   and report the error, and the server instructions forbid retrying on another agent or model on its own.

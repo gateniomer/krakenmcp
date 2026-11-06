@@ -160,7 +160,7 @@ test('status sends progress notifications while it waits', async () => {
     { onprogress: (p) => progress.push(p), timeout: 60_000 });
   assert.equal(JSON.parse(r.content[0].text).status, 'done');
   assert.ok(progress.length >= 1, 'got progress notifications');
-  assert.match(progress[0].message, /running|queued/);
+  assert.match(progress[0].message, /explain tentacle \(opencode /);
   await c.close();
 });
 

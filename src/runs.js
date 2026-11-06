@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { resolveAgent, AGENTS } from './agents.js';
 import {
-  PLANS_DIR, LOGS_DIR, WORKTREES_DIR, IN_PROGRESS, newId, insertRun, getRun, recentMessages, allRuns, latestReview,
+  PLANS_DIR, LOGS_DIR, WORKTREES_DIR, IN_PROGRESS, newId, insertRun, getRun, recentMessages, messagesSince, lastMessageId, allRuns, latestReview,
   listRuns, listPipelines, db,
 } from './store.js';
 import { pump, queueInfo } from './scheduler.js';
@@ -75,7 +75,58 @@ export function describe(run, full = false) {
       : undefined,
     log: join(LOGS_DIR, `${run.id}.log`),
     recent_messages: recentMessages(run.id),
+    cursor: lastMessageId(run.id),
   };
+}
+
+// ---- live feed: progress messages rendered as lines the head shows to the developer ----
+
+export const FEED_MAX_LINES = 12;
+const squash = (s, n = 200) => {
+  const t = s.replace(/\s+/g, ' ').trim();
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+};
+
+// "plan tentacle (claude opus)"; the model falls back to the agent's default for that access.
+export function runLabel(run, stage) {
+  const model = run.model ?? AGENTS[run.agent]?.defaultModel?.[run.access === 'read' ? 'plan' : 'execute'] ?? 'default';
+  return `${stage ? `${stage} › ` : ''}${run.tentacle} tentacle (${run.agent} ${model})`;
+}
+
+// rows: messages in id order; labelOf(run_id) gives each run's label. Returns the lines to show
+// (the newest FEED_MAX_LINES, with a marker first when older ones were dropped).
+export function renderFeed(rows, labelOf, showId = '<id>') {
+  const lines = [];
+  let prevRun = null, group = null; // group: the open run of tool calls
+  for (const m of rows) {
+    const label = labelOf(m.run_id);
+    if (m.kind === 'progress' && m.body.startsWith('tool: ')) {
+      if (!group || group.run !== m.run_id) {
+        group = { run: m.run_id, attach: prevRun === m.run_id, label, counts: new Map(), index: lines.length };
+        lines.push('');
+      }
+      const name = m.body.slice(6).trim();
+      group.counts.set(name, (group.counts.get(name) ?? 0) + 1);
+      const list = [...group.counts].map(([n, c]) => (c > 1 ? `${n} ×${c}` : n)).join(', ');
+      lines[group.index] = group.attach ? `  · tools: ${list}` : `${label} · tools: ${list}`;
+    } else {
+      group = null;
+      const lifecycle = m.kind === 'progress' && /^(started|resumed) [a-z][\w-]*: /.exec(m.body);
+      if (lifecycle) lines.push(`${label}: ${lifecycle[1]}`);
+      else if (m.kind === 'progress' && m.sender !== 'kraken') lines.push(`${label}: "${squash(m.body)}"`);
+      else if (m.kind === 'question') lines.push(`${label}: QUESTION: ${squash(m.body, 400)}`);
+      else lines.push(`${label}: ${squash(m.body)}`);
+    }
+    prevRun = m.run_id;
+  }
+  if (lines.length <= FEED_MAX_LINES) return lines;
+  return [`(+${lines.length - FEED_MAX_LINES} earlier lines; full log: krakenmcp show ${showId})`, ...lines.slice(-FEED_MAX_LINES)];
+}
+
+export function runFeed(run, since = 0) {
+  const rows = messagesSince(run.id, since);
+  const label = runLabel(run);
+  return { feed: renderFeed(rows, () => label, run.id), cursor: rows.length ? rows.at(-1).id : Math.max(since, lastMessageId(run.id)) };
 }
 
 // Create and start a run of any tentacle.
@@ -143,7 +194,7 @@ export function startRun(name, { input, plan_id, context_runs = [], target_run, 
   return {
     run_id: id, tentacle: name, status: getRun(id).status, queue: queueInfo(id), agent: s.agent, model: s.model, effort: s.effort ?? undefined,
     workdir, branch: branch ?? undefined, verify: s.access === 'write' ? s.verify ?? undefined : undefined,
-    next: `call status with run_id "${id}" and wait_seconds 50`,
+    next: `call status with run_id "${id}", wait_seconds 50 and since 0`,
     limits: limits.max_cost_usd || limits.max_tokens ? limits : undefined,
     warnings: warnings.length ? warnings : undefined,
     note: branch ? 'Uncommitted changes in the main checkout are NOT in the worktree.' : undefined,
