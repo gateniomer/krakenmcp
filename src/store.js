@@ -168,7 +168,7 @@ export const lastMessageId = (runId) =>
 export const lastPipelineMessageId = (pid) =>
   db.prepare('SELECT MAX(m.id) AS id FROM messages m JOIN runs r ON r.id = m.run_id WHERE r.pipeline_id = ?').get(pid)?.id ?? 0;
 export const pipelineRuns = (pid) =>
-  db.prepare('SELECT id, tentacle, resumed_from FROM runs WHERE pipeline_id = ? ORDER BY created_at, rowid').all(pid);
+  db.prepare('SELECT id, tentacle, resumed_from, config, cost_usd FROM runs WHERE pipeline_id = ? ORDER BY created_at, rowid').all(pid);
 
 export const listRuns = (session, limit = 20) =>
   db.prepare(`SELECT id, tentacle, access, plan_id, agent, model, effort, status, outcome, verdict, duration_ms, cost_usd,

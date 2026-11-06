@@ -8,7 +8,7 @@ import { createServer } from './mcp.js';
 import { str, num, int, bool, oneOf, list, obj } from './schema.js';
 import { resolve } from 'node:path';
 import { agentInfo, checkAgents, AGENTS } from './agents.js';
-import { IN_PROGRESS, getRun, getPipeline, lastMessageId, lastPipelineMessageId, VERSION } from './store.js';
+import { IN_PROGRESS, getRun, getPipeline, lastMessageId, lastPipelineMessageId, pipelineRuns, VERSION } from './store.js';
 import { cancelRun, resumeRun } from './control.js';
 import { mergeRun, discardRun, syncBranch } from './branches.js';
 import { pump, maxParallel } from './scheduler.js';
@@ -156,7 +156,7 @@ server.tool('status', {
     const t0 = item.started_at ?? item.created_at;
     return text({ id: item.id, status: pipe ? pipelineStatus(item) : item.status, stage: pipe ? item.stage : undefined,
       elapsed_s: t0 ? Math.round((Date.now() - new Date(t0.includes('T') ? t0 : `${t0.replace(' ', 'T')}Z`)) / 1000) : undefined,
-      cost_usd: cur?.cost_usd ?? undefined, feed: live.feed, cursor: live.cursor,
+      cost_usd: pipe ? pipelineRuns(item.id).reduce((a, r) => a + (r.cost_usd ?? 0), 0) || undefined : item.cost_usd ?? undefined, feed: live.feed, cursor: live.cursor,
       next: `show the feed lines to the developer as they are, then call status again with since: ${live.cursor}` });
   }
   return text(pipe ? describePipeline(item, full, live) : { ...describe(item, full), ...live });

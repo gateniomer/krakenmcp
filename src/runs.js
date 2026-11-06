@@ -89,7 +89,7 @@ export function runLabel(run, stage) {
 
 // rows: messages in id order; labelOf(run_id) gives each run's label. Returns the lines to show
 // (the newest FEED_MAX_LINES, with a marker first when older ones were dropped).
-export function renderFeed(rows, labelOf) {
+export function renderFeed(rows, labelOf, showId = '<id>') {
   const lines = [];
   let prevRun = null, group = null; // group: the open run of tool calls
   for (const m of rows) {
@@ -105,7 +105,7 @@ export function renderFeed(rows, labelOf) {
       lines[group.index] = group.attach ? `  · tools: ${list}` : `${label} · tools: ${list}`;
     } else {
       group = null;
-      const lifecycle = m.kind === 'progress' && /^(started|resumed) /.exec(m.body);
+      const lifecycle = m.kind === 'progress' && /^(started|resumed) [a-z][\w-]*: /.exec(m.body);
       if (lifecycle) lines.push(`${label}: ${lifecycle[1]}`);
       else if (m.kind === 'progress' && m.sender !== 'kraken') lines.push(`${label}: "${squash(m.body)}"`);
       else if (m.kind === 'question') lines.push(`${label}: QUESTION: ${squash(m.body, 400)}`);
@@ -114,13 +114,13 @@ export function renderFeed(rows, labelOf) {
     prevRun = m.run_id;
   }
   if (lines.length <= FEED_MAX_LINES) return lines;
-  return [`(+${lines.length - FEED_MAX_LINES} earlier lines; full log: krakenmcp show <id>)`, ...lines.slice(-FEED_MAX_LINES)];
+  return [`(+${lines.length - FEED_MAX_LINES} earlier lines; full log: krakenmcp show ${showId})`, ...lines.slice(-FEED_MAX_LINES)];
 }
 
 export function runFeed(run, since = 0) {
   const rows = messagesSince(run.id, since);
   const label = runLabel(run);
-  return { feed: renderFeed(rows, () => label), cursor: rows.length ? rows.at(-1).id : Math.max(since, lastMessageId(run.id)) };
+  return { feed: renderFeed(rows, () => label, run.id), cursor: rows.length ? rows.at(-1).id : Math.max(since, lastMessageId(run.id)) };
 }
 
 // Create and start a run of any tentacle.

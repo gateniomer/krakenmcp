@@ -56,7 +56,10 @@ function stageNames(pid) {
   const names = new Map();
   let reviews = 0, fixes = 0;
   for (const r of pipelineRuns(pid)) {
-    if (r.tentacle === 'review') names.set(r.id, reviews++ ? 're-review' : 'review');
+    let answering = false;
+    try { answering = !!JSON.parse(r.config ?? '{}').answering; } catch { /* unreadable config */ }
+    if (answering && names.has(r.resumed_from)) names.set(r.id, names.get(r.resumed_from)); // just an answer: same stage
+    else if (r.tentacle === 'review') names.set(r.id, reviews++ ? 're-review' : 'review');
     else if (r.tentacle === 'execute') names.set(r.id, r.resumed_from ? `fix ${++fixes}` : 'execute');
     else names.set(r.id, r.tentacle);
   }
@@ -71,7 +74,8 @@ export function pipelineFeed(p, since = 0) {
     if (!runs.has(rid)) { const run = getRun(rid); runs.set(rid, run ? runLabel(run, names.get(rid)) : 'run'); }
     return runs.get(rid);
   };
-  return { feed: renderFeed(rows, labelOf),
+  const showId = p.current_run ?? p.exec_run ?? p.plan_run ?? rows.at(-1)?.run_id ?? p.id;
+  return { feed: renderFeed(rows, labelOf, showId),
     cursor: rows.length ? rows.at(-1).id : Math.max(since, lastPipelineMessageId(p.id)) };
 }
 
