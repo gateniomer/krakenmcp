@@ -69,18 +69,22 @@ export function parseTentacleFile(text) {
 
 // Every <name>.md in dir: { tentacles: {name: settings}, problems: [..], files: [paths] }.
 // A broken file is skipped and reported; it never hides the other tentacles.
-export function loadTentacleDir(dir) {
-  const files = readTentacleDir(dir);
-  const out = { tentacles: {}, problems: [], files: files.map((f) => f.path) };
-  for (const { name, path, text } of files) {
+// Shared with chain files: every <name>.md in dir parsed with `parse` into { items, problems, files }.
+export function loadFileDir(dir, parse) {
+  const out = { items: {}, problems: [], files: [] };
+  if (!existsSync(dir)) return out;
+  for (const f of readdirSync(dir).filter((x) => x.endsWith('.md')).sort()) {
+    const path = join(dir, f), name = f.slice(0, -3);
+    out.files.push(path);
     if (!NAME.test(name)) { out.problems.push(`${path}: file name must be lowercase letters, digits, - or _ (max 32)`); continue; }
-    try { out.tentacles[name] = parseTentacleFile(text); }
-    catch (e) { out.problems.push(`${path}: ${e.message}`); }
+    try { out.items[name] = parse(readFileSync(path, 'utf8')); } catch (e) { out.problems.push(`${path}: ${e.message}`); }
   }
   return out;
 }
-const readTentacleDir = (dir) => (existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.md')).sort()
-  .map((f) => ({ name: f.slice(0, -3), path: join(dir, f), text: readFileSync(join(dir, f), 'utf8') })) : []);
+export function loadTentacleDir(dir) {
+  const { items, problems, files } = loadFileDir(dir, parseTentacleFile);
+  return { tentacles: items, problems, files };
+}
 
 // Built-ins ship as files next to this module; edit them there.
 export const BUILTIN_DIR = fileURLToPath(new URL('./tentacles/', import.meta.url));
@@ -173,7 +177,7 @@ export function resolveTentacle(name, cwd, overrides = {}, layers = []) {
 
   if (!merged.prompt) throw new Error(`Tentacle "${name}" has no prompt; add one in ${join(userDir(), `${name}.md`)}.`);
   if (merged.model == null) {
-    merged.model = AGENTS[merged.agent].defaultModel[merged.access === 'read' ? 'plan' : 'execute'];
+    merged.model = AGENTS[merged.agent].defaultModel[merged.access];
     sources.model = `${sources.model ?? 'built-in'} → agent default`;
   }
   return {

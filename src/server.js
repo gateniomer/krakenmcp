@@ -1,72 +1,28 @@
 #!/usr/bin/env node
-// Kraken MCP server: tool definitions. Run logic lives in runs.js / control.js /
-// branches.js / scheduler.js, settings in tentacles.js.
+// Kraken MCP server: tool definitions only. Runs: runs.js, control.js, status.js; branches:
+// branches.js; chains: chain.js; settings: tentacles.js, chains.js.
 // Usage guidance is sent once as server instructions; tool descriptions stay short because they are
 // resent with every request the head makes.
 import './quiet.js';
+import { readFileSync } from 'node:fs';
 import { createServer } from './mcp.js';
 import { str, num, int, bool, oneOf, list, obj } from './schema.js';
 import { resolve } from 'node:path';
 import { agentInfo, checkAgents, AGENTS } from './agents.js';
-import { IN_PROGRESS, getRun, getChain, VERSION } from './store.js';
+import { getRun, VERSION } from './store.js';
 import { cancelRun, resumeRun } from './control.js';
 import { mergeRun, discardRun, syncBranch } from './branches.js';
-import { pump, maxParallel } from './scheduler.js';
+import { maxParallel } from './scheduler.js';
 import { startChain, cancelChain, resumeChain, isChainId } from './chain.js';
-import { describeChain, chainStatus, chainFeed, chainSummary, chainCard } from './chain-view.js';
 import { knownChains, resolveChain, checkChain, userChainDir, userChains } from './chains.js';
 import { resolveTentacle, knownNames, userDir, userTentacles } from './tentacles.js';
 import { startRun } from './runs.js';
-import { describe, clip } from './view.js';
-import { runFeed, runSummary, runCard } from './feed.js';
+import { clip } from './view.js';
+import { status } from './status.js';
 import { sessionSummary, agentReport } from './stats.js';
 
-const INSTRUCTIONS = `Kraken delegates work to other headless coding agents. Each action is a "tentacle"; you are the head
-(the agent the developer talks to) that sends work to them.
-Runs are asynchronous: every start tool returns a run_id at once. Then call status(run_id, wait_seconds: 50, since: 0),
-and on each later call pass the cursor it returned as since. Do not poll faster.
-Cards: every start tool, resume and status reply carries "card", a small bordered box. Show it to the developer
-every time you get one, as-is in a code block: when you call a tentacle, on every status reply (also when there
-are no new feed lines), and when it finishes. While it runs, put the new feed lines under the card in the same code
-block, one per line, nothing added. Never redraw, shorten or reword a card; add at most one short line of your own.
-
-After every finished run or chain, follow its \`next\`:
-- "ask: …" show the result, suggest exactly that step, then stop and wait for the developer.
-- "auto: …" the developer allowed this step without asking (the tentacle's autonomy is auto): take it.
-- "stop: …" report to the developer and wait.
-
-Usual order (not a script): discuss the feature with the developer yourself; you are the one who advises them.
-think only for hard logic (multi-system changes, state/timing/concurrency/networking/persistence, correctness
-arguments, or after a failed attempt), never for simple edits: it is slow and expensive; relay its recommendation in
-your own words and ask its open questions. Then plan(task + the developer's answers, context_runs: [think run_id]),
-execute(plan_id) (on branch kraken/<run_id> in a separate worktree), review(run_id) (VERDICT: approve |
-changes_requested), then merge. To fix things on the same branch use resume(run_id, instruction).
-merge(run_id) returns a preview. Show it to the developer and call merge(run_id, confirm) only after
-they explicitly approve. If merge reports auto: true it already landed (the review tentacle's autonomy is auto); tell the developer.
-discard(run_id) throws the work away: only with the developer's approval, always.
-If merge reports conflicts (or its preview predicts them), call update(run_id): it merges the current branch
-into the run's branch and, on conflicts, resumes the agent to resolve them.
-
-Chains: chain(task, verify?) runs the developer's configured stage list (default: plan -> execute -> review, with fix
-rounds), pausing after each stage whose autonomy is ask; chain(name: …) runs another (tentacles() lists them). A chain
-that is "waiting" with a pause continues with resume(chain_id, their reply); one waiting on a question is answered
-through its stage run.
-
-Session override: if the developer explicitly tells you to work in auto for this session, treat every "ask:" next as
-"auto:" until they say otherwise. It never covers questions, "stop:", verify_failed, discard or merge blockers:
-confirm a merge only when auto_merge_blocked_by is empty.
-
-If status is "waiting", the agent asked a question only the developer can answer: ask them, then call
-resume(run_id, their reply). A run stopped as "over_budget" hit its max_cost_usd / max_tokens.
-Failures stop you: if a tool returns an error, or a run ends as "failed", "timeout" or "over_budget",
-do not retry it and do not switch agent, model or effort on your own. Report the error to the developer
-immediately and ask how to proceed. A "verify_failed" run keeps its commit; report the verify output.
-Use explain(area) instead of reading many files yourself.
-For questions that need current information from the web (APIs, versions, library choices), call
-run(tentacle: "research", input: question) instead of answering from memory.
-When a think, plan, review, explain or research run finishes, give the developer its result_file path so they can read
-the full text (or tell them: krakenmcp show <run_id>).
-Settings are the developer's: tentacle files in ~/.kraken/tentacles/ and chain files in ~/.kraken/chains/.`;
+// Sent once when the client connects: how the head should use Kraken (edit src/instructions.md).
+const INSTRUCTIONS = readFileSync(new URL('./instructions.md', import.meta.url), 'utf8').trim();
 
 const SESSION = str({ default: 'default', description: 'Run group label' });
 const CWD = str({ description: 'Repository path' });
@@ -82,7 +38,6 @@ const attempt = (fn) => {
     return text(r);
   } catch (e) { return fail(e.message); }
 };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const server = createServer({
   info: { name: 'kraken', title: 'Kraken', version: VERSION,
@@ -145,52 +100,9 @@ server.tool('status', {
   input: { run_id: str({ required: true, description: 'Run id or chain id' }),
     wait_seconds: num({ min: 0, max: 55, default: 0 }), full: bool({ default: false, description: 'Full result instead of an excerpt' }),
     since: int({ min: 0, description: 'Cursor from the previous status: returns only newer progress lines as feed' }) },
-}, async ({ run_id, wait_seconds, full, since }, { progress }) => {
-  pump(); // also recovers runs whose worker died, and starts queued runs if there is room
-  const pipe = isChainId(run_id);
-  const load = () => (pipe ? getChain(run_id) : getRun(run_id));
-  const busy = (x) => (pipe ? chainStatus(x) === 'running' : IN_PROGRESS.includes(x.status));
-  let item = load();
-  if (!item) return fail(`no ${pipe ? 'chain' : 'run'} ${run_id}`);
-  const started = Date.now(), deadline = started + wait_seconds * 1000;
-  let lastKey = null;
-  while (busy(item) && Date.now() < deadline) {
-    await sleep(1000);
-    item = load();
-    if (progress) {
-      const live = progressNote(pipe ? item.current_run : run_id, pipe ? item.stage : null, pipe ? run_id : null);
-      const key = live?.key ?? live?.headline;
-      if (key && (key !== lastKey || (Date.now() - started) % 10_000 < 1000)) {
-        lastKey = key;
-        progress(Math.round((Date.now() - started) / 1000), live.headline);
-      }
-    }
-  }
-  const sum = pipe ? chainSummary(item) : runSummary(item);
-  const card = pipe ? chainCard(item) : runCard(item);
-  if (since === undefined) {
-    return text(pipe ? { card, ...describeChain(item, full), summary: sum }
-      : { card, ...describe(item, full), summary: sum });
-  }
-  const live = pipe ? chainFeed(item, since, !busy(item)) : runFeed(item, since, !busy(item));
-  if (busy(item)) { // compact reply: only what the head shows to the developer
-    return text({ card, id: item.id, status: sum.status, stage: sum.stage, elapsed_s: sum.elapsed_s, cost_usd: sum.cost_usd,
-      summary: sum, feed: live.feed, cursor: live.cursor,
-      next: `show card as-is in a code block with the feed lines under it (even if there are none), then call status again with since: ${live.cursor}` });
-  }
-  return text(pipe ? { card, ...describeChain(item, full, live), summary: sum }
-    : { card, ...describe(item, full), ...live, summary: sum });
+}, async (args, { progress }) => {
+  try { return text(await status(args, progress)); } catch (e) { return fail(e.message); }
 });
-
-// The live summary of a run or chain, for progress notifications (key = headline without time).
-function progressNote(runId, stage, chainId) {
-  if (chainId) {
-    const c = getChain(chainId);
-    return c ? chainSummary(c) : null;
-  }
-  const run = runId ? getRun(runId) : null;
-  return run ? runSummary(run, stage) : null;
-}
 
 server.tool('resume', {
   description: 'Continue a run in its own agent session and branch, as a new run id. On a "waiting" run, input is ' +

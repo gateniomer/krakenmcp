@@ -1,4 +1,4 @@
-// End to end: chains, budgets, progress notifications, and tentacle files.
+// End to end: chains (stages, pauses, fix rounds, merging, chain files).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
@@ -234,55 +234,4 @@ test('chain: cancel stops the current step; a dead driver is marked failed', asy
   assert.match(dead.next, /report this error to the developer/);
   if (dead.runs.plan) await slow.call('cancel', { run_id: dead.runs.plan });
   await slow.close();
-});
-
-test('max_cost_usd and max_tokens stop a run as over_budget while it is running', async () => {
-  h.tentacle('explain', { max_cost_usd: 0.5 });
-  const pricey = await h.client({ STUB_COST: '1', STUB_SLEEP: '20' });
-  const started = Date.now();
-  const r = await pricey.call('explain', { area: 'expensive', cwd: h.repo });
-  assert.deepEqual(r.limits, { max_cost_usd: 0.5 });
-  const s = await pricey.wait(r.run_id);
-  assert.equal(s.status, 'over_budget');
-  assert.match(s.next, /report this error to the developer/);
-  assert.match(s.stopped, /passed max_cost_usd \$0\.5/);
-  assert.ok(Date.now() - started < 15_000, 'stopped long before the agent would have finished');
-  assert.ok(s.metrics.cost_usd >= 1);
-
-  h.tentacle('explain', { max_tokens: 500 });
-  const cheap = await h.client({ STUB_COST: '0.0001', STUB_SLEEP: '20' });
-  const t = await cheap.wait((await cheap.call('explain', { area: 'wordy', cwd: h.repo })).run_id);
-  assert.equal(t.status, 'over_budget');
-  assert.match(t.next, /report this error to the developer/);
-  assert.match(t.stopped, /tokens passed max_tokens 500/);
-  h.tentacle('explain', null);
-  assert.equal((await k.call('session', {})).groups.find((g) => g.group.startsWith('explain')).failed, 2);
-  await pricey.close(); await cheap.close();
-});
-
-test('status sends progress notifications while it waits', async () => {
-  const c = await h.client({ STUB_SLEEP: '3' });
-  const { run_id } = await c.call('explain', { area: 'progress', cwd: h.repo });
-  const progress = [];
-  const r = await c.c.callTool({ name: 'status', arguments: { run_id, wait_seconds: 20 } }, undefined,
-    { onprogress: (p) => progress.push(p), timeout: 60_000 });
-  assert.equal(JSON.parse(r.content[0].text).status, 'done');
-  assert.ok(progress.length >= 1, 'got progress notifications');
-  assert.match(progress[0].message, /^\[ 🦑 explain › opencode /);
-  await c.close();
-});
-
-test('tentacle files in the developer\'s data dir add tentacles without any config command', async () => {
-  const dir = join(h.env.KRAKEN_DATA, 'tentacles');
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'audit-deps.md'), '---\ndescription: Audit dependencies\nagent: opencode\n---\nAudit the dependencies of {{task}}\n');
-  writeFileSync(join(dir, 'broken.md'), 'no header here');
-  const t = await k.call('tentacles', { cwd: h.repo });
-  const a = t.tentacles.find((x) => x.name === 'audit-deps');
-  assert.equal(a.sources.prompt, 'user file');
-  assert.match(t.user_files.problems[0], /broken\.md: expected a "---" settings header/);
-  assert.ok(!t.tentacles.some((x) => x.name === 'broken'), 'a broken file is skipped, not fatal');
-  const s = await k.wait((await k.call('run', { tentacle: 'audit-deps', input: 'package.json', cwd: h.repo })).run_id);
-  assert.equal(s.status, 'done');
-  assert.ok(h.argsLog().at(-1).includes('Audit the dependencies of package.json'));
 });

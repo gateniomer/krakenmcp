@@ -6,6 +6,7 @@ import { AGENTS } from './agents.js';
 import { PLANS_DIR, IN_PROGRESS, recentMessages, messagesSince, messagesSinceAll, lastMessageId, toolMessages } from './store.js';
 import { queueInfo } from './scheduler.js';
 import { metrics, nextOf } from './view.js';
+import { parseJson } from './util.js';
 import { box, tildify } from './card.js';
 
 // ---- live feed: progress messages rendered as lines the head shows to the developer ----
@@ -18,7 +19,7 @@ const squash = (s, n = 200) => {
 
 // The model a run uses; falls back to the agent's default for that access.
 export function modelOf(run) {
-  return run.model ?? AGENTS[run.agent]?.defaultModel?.[run.access === 'read' ? 'plan' : 'execute'] ?? 'default';
+  return run.model ?? AGENTS[run.agent]?.defaultModel?.[run.access] ?? 'default';
 }
 
 // "plan tentacle (claude opus)"; the model falls back to the agent's default for that access.
@@ -142,6 +143,7 @@ export function runSummary(run, stage) {
       verify: run.verify_cmd ? { cmd: run.verify_cmd, exit: run.verify_exit ?? undefined } : undefined,
       resumed_from: run.resumed_from ?? undefined,
     },
+    now: current,
     last_line: lastAgentText(rows),
     question: run.status === 'waiting' ? run.question : undefined,
   };
@@ -168,20 +170,19 @@ export function startCard(run) {
   ]);
 }
 
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const diffText = (d) => (d ? `${plural(d.files, 'file')}, +${d.insertions} −${d.deletions}` : null);
+
 // The card for a run in progress (what it is doing now) or finished (its result and the next step).
-export function runCard(run) {
-  const m = metrics(run);
-  const tools = toolCounts(toolMessages(run.id));
-  const time = timeLine(m.duration_ms, m.cost_usd, tools);
+// Built from the run's summary, so a status reply reads the messages once.
+export function runCard(run, sum = runSummary(run)) {
+  const time = timeLine(sum.elapsed_s * 1000, sum.cost_usd, sum.tools);
   if (IN_PROGRESS.includes(run.status)) {
-    const rows = recentMessages(run.id, 50);
-    const now = currentActivity(rows, run.status), said = lastAgentText(rows);
-    return box(runTitle(run), statusText(run.status), [
-      ['run', run.id], ['time', time], ['now', now], ['said', said && !said.startsWith(now.replace(/…$/, '')) ? said : null, 2],
-    ]);
+    const said = sum.last_line && !sum.last_line.startsWith(sum.now.replace(/…$/, '')) ? sum.last_line : null;
+    return box(runTitle(run), statusText(run.status), [['run', run.id], ['time', time], ['now', sum.now], ['said', said, 2]]);
   }
   const file = join(PLANS_DIR, `${run.id}.md`);
-  const diff = m.diff ? `${m.diff.files} file${m.diff.files === 1 ? '' : 's'}, +${m.diff.insertions} −${m.diff.deletions}` : null;
+  const diff = diffText(parseJson(run.diff_stat));
   return box(runTitle(run), statusText(run.status), [
     ['run', run.id],
     ['took', time],

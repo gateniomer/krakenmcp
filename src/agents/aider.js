@@ -6,16 +6,16 @@ import { emptyTokens, countTools } from './util.js';
 export default {
   bin: 'aider',
   docs: 'https://aider.chat/docs/config/options.html',
-  defaultModel: { plan: null, execute: null }, // use aider's configured default
+  defaultModel: { read: null, write: null }, // use aider's configured default
   effortNote: 'passed as --reasoning-effort <effort>',
   reports: { cost: true, tokens: true, tool_calls: false },
   ignore: ['.aider*'],
-  build(kind, { prompt, model, effort, lastMessageFile, resumeSession }) {
+  build(access, { prompt, model, effort, lastMessageFile, resumeSession }) {
     const history = aiderHistory(lastMessageFile, resumeSession);
     const args = ['--message', prompt, '--yes-always', '--no-auto-commits', '--no-pretty', '--no-stream',
       '--no-check-update', '--no-show-release-notes', '--no-analytics', '--no-gitignore',
       '--chat-history-file', history, '--input-history-file', `${history}.input`];
-    if (kind === 'plan') args.push('--chat-mode', 'ask'); // answers questions, never edits
+    if (access === 'read') args.push('--chat-mode', 'ask'); // answers questions, never edits
     if (model) args.push('--model', model);
     if (effort) args.push('--reasoning-effort', effort);
     if (resumeSession) args.push('--restore-chat-history');

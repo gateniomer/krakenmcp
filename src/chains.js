@@ -11,11 +11,10 @@
 // Each stage may set agent, model, effort, verify and autonomy for that stage only (layer
 // "chain <name>"). A successful stage continues to the next when its autonomy is auto, and pauses
 // for the developer when it is ask. Fix rounds (review changes_requested, failed verify) never pause.
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DATA_DIR } from './store.js';
-import { FIELDS, NAME, parseHeader, validate, resolveTentacle, stageKind } from './tentacles.js';
+import { FIELDS, NAME, parseHeader, validate, resolveTentacle, stageKind, loadFileDir } from './tentacles.js';
 
 const STAGE_KEYS = ['tentacle', 'agent', 'model', 'effort', 'verify', 'autonomy'];
 const CHAIN_KEYS = ['description', 'stages', 'max_fix_rounds'];
@@ -52,16 +51,8 @@ function checkStages(stages) {
 }
 
 function loadChainDir(dir) {
-  const out = { chains: {}, problems: [], files: [] };
-  if (!existsSync(dir)) return out;
-  for (const f of readdirSync(dir).filter((x) => x.endsWith('.md')).sort()) {
-    const path = join(dir, f), name = f.slice(0, -3);
-    out.files.push(path);
-    if (!NAME.test(name)) { out.problems.push(`${path}: file name must be lowercase letters, digits, - or _ (max 32)`); continue; }
-    try { out.chains[name] = parseChainFile(readFileSync(path, 'utf8')); }
-    catch (e) { out.problems.push(`${path}: ${e.message}`); }
-  }
-  return out;
+  const { items, problems, files } = loadFileDir(dir, parseChainFile);
+  return { chains: items, problems, files };
 }
 
 export const BUILTIN_CHAIN_DIR = fileURLToPath(new URL('./chains/', import.meta.url));

@@ -19,11 +19,11 @@ test('which finds executables on PATH only', () => {
 });
 
 test('opencode: read vs write mode, model, effort, resume', () => {
-  assert.deepEqual(opencode.build('plan', { prompt: 'P' }),
+  assert.deepEqual(opencode.build('read', { prompt: 'P' }),
     ['run', '--standalone', '--format', 'json', '--agent', 'plan', 'P']);
-  assert.deepEqual(opencode.build('execute', { prompt: 'P', model: 'prov/m', effort: 'high' }),
+  assert.deepEqual(opencode.build('write', { prompt: 'P', model: 'prov/m', effort: 'high' }),
     ['run', '--standalone', '--format', 'json', '-m', 'prov/m#high', '--auto', 'P']);
-  assert.deepEqual(opencode.build('execute', { prompt: 'P', resumeSession: 'ses_1' }),
+  assert.deepEqual(opencode.build('write', { prompt: 'P', resumeSession: 'ses_1' }),
     ['run', '--standalone', '--format', 'json', '--session', 'ses_1', '--auto', 'P']);
 });
 
@@ -48,11 +48,11 @@ test('opencode: parse events into text, tokens, cost, steps, tool calls', () => 
 });
 
 test('claude: flags and final JSON parsing', () => {
-  assert.deepEqual(claude.build('plan', { prompt: 'P', model: 'opus' }),
+  assert.deepEqual(claude.build('read', { prompt: 'P', model: 'opus' }),
     ['-p', 'P', '--output-format', 'stream-json', '--verbose', '--model', 'opus', '--permission-mode', 'plan']);
   assert.deepEqual(claude.budgetArgs(2), ['--max-budget-usd', '2']);
-  assert.ok(claude.build('execute', { prompt: 'P', resumeSession: 's' }).join(' ').includes('--resume s'));
-  assert.ok(claude.build('plan', { prompt: 'P', effort: 'high' }).join(' ').includes('--effort high'));
+  assert.ok(claude.build('write', { prompt: 'P', resumeSession: 's' }).join(' ').includes('--resume s'));
+  assert.ok(claude.build('read', { prompt: 'P', effort: 'high' }).join(' ').includes('--effort high'));
   const p = claude.parse(JSON.stringify({ result: 'R', session_id: 's1', total_cost_usd: 0.1, num_turns: 3,
     usage: { input_tokens: 5, output_tokens: 6, cache_read_input_tokens: 7, cache_creation_input_tokens: 8 } }));
   assert.equal(p.text, 'R');
@@ -61,11 +61,11 @@ test('claude: flags and final JSON parsing', () => {
 });
 
 test('codex: sandbox follows access, effort via -c, resume subcommand', () => {
-  const r = codex.build('plan', { prompt: 'P', lastMessageFile: '/tmp/x', effort: 'high' });
+  const r = codex.build('read', { prompt: 'P', lastMessageFile: '/tmp/x', effort: 'high' });
   assert.ok(r.includes('read-only'));
   assert.ok(r.includes('model_reasoning_effort="high"'));
-  assert.ok(codex.build('execute', { prompt: 'P', lastMessageFile: '/tmp/x' }).includes('workspace-write'));
-  assert.deepEqual(codex.build('execute', { prompt: 'P', lastMessageFile: '/tmp/x', resumeSession: 't1' }).slice(-3),
+  assert.ok(codex.build('write', { prompt: 'P', lastMessageFile: '/tmp/x' }).includes('workspace-write'));
+  assert.deepEqual(codex.build('write', { prompt: 'P', lastMessageFile: '/tmp/x', resumeSession: 't1' }).slice(-3),
     ['resume', 't1', 'P']);
 });
 
@@ -99,9 +99,9 @@ test('claude: unparseable output is kept as text instead of throwing', () => {
 
 test('cursor: ask mode for read, --force only for write, never auto-approves MCP servers', () => {
   const { cursor } = AGENTS;
-  const read = cursor.build('plan', { prompt: 'P', model: 'gpt-x' });
+  const read = cursor.build('read', { prompt: 'P', model: 'gpt-x' });
   assert.deepEqual(read, ['-p', '--output-format', 'stream-json', '--trust', '--mode', 'ask', '--model', 'gpt-x', 'P']);
-  const write = cursor.build('execute', { prompt: 'P', resumeSession: 'chat1' });
+  const write = cursor.build('write', { prompt: 'P', resumeSession: 'chat1' });
   assert.ok(write.includes('--force') && !write.includes('--mode'));
   assert.deepEqual(write.slice(-3), ['--resume', 'chat1', 'P']);
   for (const a of [read, write]) assert.ok(!a.includes('--approve-mcps'));
@@ -163,11 +163,11 @@ test('claude: stream-json events give text, tool counts, deduped usage and the b
 
 test('aider: ask mode for read, history outside the worktree, tokens and cost from its text output', () => {
   const { aider } = AGENTS;
-  const plan = aider.build('plan', { prompt: 'P', model: 'sonnet', effort: 'high', lastMessageFile: '/d/logs/run1.last.txt' });
+  const plan = aider.build('read', { prompt: 'P', model: 'sonnet', effort: 'high', lastMessageFile: '/d/logs/run1.last.txt' });
   assert.ok(plan.join(' ').includes('--chat-mode ask'));
   assert.ok(plan.join(' ').includes('--chat-history-file /d/logs/run1.aider-chat.md'));
   assert.ok(plan.includes('--no-auto-commits') && plan.includes('--reasoning-effort'));
-  const exec = aider.build('execute', { prompt: 'P', lastMessageFile: '/d/logs/run2.last.txt', resumeSession: '/d/logs/run1.aider-chat.md' });
+  const exec = aider.build('write', { prompt: 'P', lastMessageFile: '/d/logs/run2.last.txt', resumeSession: '/d/logs/run1.aider-chat.md' });
   assert.ok(!exec.includes('ask') && exec.includes('--restore-chat-history'));
   assert.ok(exec.join(' ').includes('--chat-history-file /d/logs/run1.aider-chat.md'), 'a resumed run keeps the first history');
   const out = [

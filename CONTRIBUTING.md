@@ -19,9 +19,13 @@ Requires Node 22.13+ (for `node:sqlite`), git, and macOS or Linux.
 | Path | What it is |
 |---|---|
 | `src/bin.js` | `krakenmcp` entry: server by default, CLI with a subcommand |
-| `src/server.js` | MCP tool definitions and server instructions |
+| `src/server.js`, `src/instructions.md` | MCP tool definitions; the instructions the head gets on connect |
+| `src/status.js` | The status tool: waiting, progress notifications, the reply for a run or a chain |
 | `src/mcp.js`, `src/schema.js` | The MCP protocol over stdio (no SDK) and tool input schemas with their validator |
-| `src/runs.js` | Creating runs, status views, the session summary and stats |
+| `src/runs.js` | Creating and starting a run |
+| `src/view.js` | One run's metrics, its `next` step and its full status reply |
+| `src/feed.js` | Feed lines, the live summary and headline, run cards |
+| `src/stats.js` | Session summary, totals, which agents tentacles need |
 | `src/control.js` | cancel and resume (which also answers a waiting run) |
 | `src/branches.js` | Git and `kraken/<run_id>` branches: merge (following the review's autonomy), discard, update, review diffs |
 | `src/scheduler.js` | Parallel-run limit, starting workers, recovering dead runs |
@@ -29,7 +33,9 @@ Requires Node 22.13+ (for `node:sqlite`), git, and macOS or Linux.
 | `src/worker.js` | Background process that runs one agent, enforces budgets and records the result |
 | `src/card.js` | The bordered cards the head shows (display width, cutting, wrapping) |
 | `src/chains.js`, `src/chains/*.md` | Chain files: parsing, layering and checks; the built-in chains |
-| `src/chain.js`, `src/chain-driver.js` | Chain state machine and the detached process that drives it |
+| `src/chain.js`, `src/chain-driver.js` | Chain start/cancel/resume, its state machine, and the detached process that drives it |
+| `src/chain-view.js` | A chain's status, feed, summary, card and status reply |
+| `src/git.js`, `src/util.js` | Git helpers (incl. recreating a deleted worktree); JSON, dates and paging |
 | `src/platform.js` | Everything OS-specific: finding and starting executables, killing process trees, shells |
 | `src/tentacles.js` | Tentacle files, layered settings, prompt rendering |
 | `src/tentacles/*.md` | The built-in tentacles: settings header plus prompt |

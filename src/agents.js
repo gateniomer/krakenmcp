@@ -1,6 +1,8 @@
 // Agent registry. Each adapter lives in src/agents/<name>.js and implements:
-// build(kind, {prompt, model, effort, lastMessageFile, resumeSession}) -> argv
+// build(access, {prompt, model, effort, lastMessageFile, resumeSession}) -> argv
+//   access: 'read' (the agent's read-only mode) or 'write' (may edit files in its workdir)
 //   resumeSession: continue that native agent session (resume / answer) instead of starting fresh
+// defaultModel: { read, write }: the model when a tentacle sets none (null = the agent's own default)
 // parse(stdout, lastMessageFile, {resumeSession}) -> normalized result:
 //   { text, nativeSession, tokens: {input, output, reasoning, cache_read, cache_write},
 //     cost, steps, toolCalls: {total, failed, by_tool}, overBudget?, error? (the agent's own error message) }

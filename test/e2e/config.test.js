@@ -1,7 +1,7 @@
 // End to end: settings (tentacle files) and how MCP sees them, the CLI, show, and prune.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, writeFileSync, mkdtempSync, symlinkSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, mkdirSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -198,4 +198,19 @@ test('krakenmcp prints nothing on stderr (the SQLite experimental warning is fil
   assert.equal(r.status, 0);
   assert.deepEqual(JSON.parse(r.stdout), { max_parallel: 3 });
   assert.equal(r.stderr, '');
+});
+
+test('tentacle files in the developer\'s data dir add tentacles without any config command', async () => {
+  const dir = join(h.env.KRAKEN_DATA, 'tentacles');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'audit-deps.md'), '---\ndescription: Audit dependencies\nagent: opencode\n---\nAudit the dependencies of {{task}}\n');
+  writeFileSync(join(dir, 'broken.md'), 'no header here');
+  const t = await k.call('tentacles', { cwd: h.repo });
+  const a = t.tentacles.find((x) => x.name === 'audit-deps');
+  assert.equal(a.sources.prompt, 'user file');
+  assert.match(t.user_files.problems[0], /broken\.md: expected a "---" settings header/);
+  assert.ok(!t.tentacles.some((x) => x.name === 'broken'), 'a broken file is skipped, not fatal');
+  const s = await k.wait((await k.call('run', { tentacle: 'audit-deps', input: 'package.json', cwd: h.repo })).run_id);
+  assert.equal(s.status, 'done');
+  assert.ok(h.argsLog().at(-1).includes('Audit the dependencies of package.json'));
 });

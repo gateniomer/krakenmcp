@@ -4,16 +4,16 @@ import { jsonLines, emptyTokens, countTools } from './util.js';
 export default {
   bin: 'opencode',
   docs: 'https://opencode.ai/docs/cli/',
-  defaultModel: { plan: null, execute: null }, // use opencode's configured default model
+  defaultModel: { read: null, write: null }, // use opencode's configured default model
   effortNote: 'appended as model#variant (e.g. "high" -> provider/model#high); needs an explicit model',
   reports: { cost: true, tokens: true, tool_calls: true },
-  build(kind, { prompt, model, effort, resumeSession }) {
+  build(access, { prompt, model, effort, resumeSession }) {
     // --standalone gives each run a private server, so it never depends on (or collides with)
     // the developer's background `opencode serve --service`.
     const args = ['run', '--standalone', '--format', 'json'];
     if (model) args.push('-m', effort ? `${model}#${effort}` : model);
     if (resumeSession) args.push('--session', resumeSession); // verified flag: continue a session
-    if (kind === 'plan') args.push('--agent', 'plan'); // built-in read-only agent
+    if (access === 'read') args.push('--agent', 'plan'); // built-in read-only agent
     else args.push('--auto');                          // auto-approve edits (runs in a worktree)
     args.push(prompt);
     return args;

@@ -33,12 +33,11 @@ try { agent = resolveAgent(run.agent); } catch (e) { failEarly(e.message); }
 const config = parseJson(run.config, {});
 const limits = config.limits ?? {}; // { max_cost_usd, max_tokens } resolved when the run was created
 const lastMessageFile = join(LOGS_DIR, `${runId}.last.txt`);
-// The prompt was rendered when the run was created (see tentacles.js); access maps to the agent's
-// read-only or write mode, so the prompt cannot widen permissions.
-const mode = run.access === 'read' ? 'plan' : 'execute';
+// The prompt was rendered when the run was created (see tentacles.js); access (read | write) maps to
+// the agent's read-only or write mode, so the prompt cannot widen permissions.
 // Set when the run was created by resume/answer.
 const resumeSession = run.native_session ?? null;
-const args = agent.build(mode, { prompt: run.prompt, model: run.model, effort: run.effort, lastMessageFile, resumeSession });
+const args = agent.build(run.access, { prompt: run.prompt, model: run.model, effort: run.effort, lastMessageFile, resumeSession });
 // Agents that can enforce a spend cap themselves get it too (Kraken's own check is per second).
 if (limits.max_cost_usd && agent.budgetArgs) args.unshift(...agent.budgetArgs(limits.max_cost_usd));
 const log = createWriteStream(join(LOGS_DIR, `${runId}.log`));
@@ -132,66 +131,78 @@ function runVerify() {
   return { exit: r.status ?? (r.error ? -1 : null), output };
 }
 
+// Check and commit a write run's work: Kraken runs verify itself instead of trusting the agent's
+// summary, and commits so the kraken/<run_id> branch holds the work (even when verify failed, so it
+// can be reviewed). During an update() conflict resolution the commit concludes the merge, and
+// leftover conflict markers are never committed.
+function commitWork() {
+  const verify = runVerify();
+  const diff = diffStat();
+  const markers = config.sync_base && run.branch ? conflictMarkers() : [];
+  const markerError = markers.length ? `conflict markers are still in: ${markers.join(', ')}; the merge is not finished` : null;
+  if (run.branch && diff && !markerError) {
+    const refs = [`run ${runId}`, run.plan_id && `plan ${run.plan_id}`, run.resumed_from && `resumes ${run.resumed_from}`];
+    try {
+      git('-c', 'user.name=Kraken', '-c', 'user.email=kraken@localhost', 'commit', '-q',
+        '-m', `kraken(${run.tentacle}/${run.agent}): ${run.task.slice(0, 64)}`, '-m', refs.filter(Boolean).join(', '));
+    } catch { /* nothing to commit */ }
+    if (config.sync_base && !hasMergeHead()) {
+      db.prepare('UPDATE runs SET base_sha = ? WHERE branch = ?').run(config.sync_base, run.branch);
+    }
+  }
+  return { verify, diff, markerError };
+}
+
+function finalStatus({ ok, question, verify, markerError }) {
+  if (stopReason) return stopReason;
+  if (!ok || markerError) return 'failed';
+  if (question) return 'waiting';
+  return verify && verify.exit !== 0 ? 'verify_failed' : 'done';
+}
+
+function errorText(ok, code, p, markerError) {
+  if (markerError) return markerError;
+  if (ok || stopReason) return null;
+  const detail = [p.error, stderr.trim().slice(-2000)].filter(Boolean).join('\n');
+  return `exit ${code}: ${detail || '(no output on stderr; see the log)'}`;
+}
+
+const json = (v) => (v ? JSON.stringify(v) : null);
+const QUESTION = /^\s*KRAKEN_QUESTION:\s*(.+)$/m;
+const VERDICT = /VERDICT:\s*\**\s*(approve|changes_requested)/i;
+
+function finish(code, duration_ms) {
+  const p = agent.parse(stdout, lastMessageFile, { resumeSession });
+  if (!stopReason && p.overBudget) { stopReason = 'over_budget'; stopDetail = `${run.agent} stopped at its --max-budget-usd cap`; }
+  const ok = !!(code === 0 && p.text && !stopReason);
+  const question = ok ? p.text.match(QUESTION)?.[1]?.trim() ?? null : null;
+  const isReview = run.tentacle === 'review' || config.needs_diff;
+  const verdict = ok && isReview ? p.text.match(VERDICT)?.[1]?.toLowerCase() ?? null : null;
+  if (ok && run.access === 'read') writeFileSync(join(PLANS_DIR, `${runId}.md`), `${p.text}\n`);
+  // A run that stopped to ask a question keeps its uncommitted work for the resumed run.
+  const { verify = null, diff = null, markerError = null } = ok && run.access === 'write' && !question ? commitWork() : {};
+  const status = finalStatus({ ok, question, verify, markerError });
+  updateRun(runId, {
+    status, result: p.text || null, question, verdict,
+    native_session: p.nativeSession ?? run.native_session,
+    tokens: json(p.tokens), cost_usd: p.cost, steps: p.steps, tool_calls: json(p.toolCalls), diff_stat: json(diff),
+    verify_exit: verify?.exit ?? null, verify_output: verify?.output ?? null,
+    exit_code: code, duration_ms,
+    stop_reason: stopReason === 'over_budget' ? stopDetail : null,
+    error: errorText(ok, code, p, markerError),
+    finished_at: nowIso(),
+  });
+  if (question) say('question', question, run.agent);
+  const notes = [verify && `verify exit ${verify.exit}`, verdict && `verdict ${verdict}`].filter(Boolean);
+  say(status, [`${status} in ${(duration_ms / 1000).toFixed(1)}s`, ...notes].join(', '), run.agent);
+}
+
 const startedMs = Date.now();
 child.on('close', (code) => {
   clearTimeout(killer);
   clearInterval(watcher);
   log.end();
-  const duration_ms = Date.now() - startedMs;
-  const p = agent.parse(stdout, lastMessageFile, { resumeSession });
-  if (!stopReason && p.overBudget) { stopReason = 'over_budget'; stopDetail = `${run.agent} stopped at its --max-budget-usd cap`; }
-  const ok = code === 0 && p.text && !stopReason;
-  const question = ok ? p.text.match(/^\s*KRAKEN_QUESTION:\s*(.+)$/m)?.[1]?.trim() ?? null : null;
-  const verdict = ok && (run.tentacle === 'review' || config.needs_diff)
-    ? p.text.match(/VERDICT:\s*\**\s*(approve|changes_requested)/i)?.[1]?.toLowerCase() ?? null : null;
-  if (ok && run.access === 'read') writeFileSync(join(PLANS_DIR, `${runId}.md`), p.text + '\n');
-
-  let verify = null, diff = null, markerError = null;
-  // A run that stopped to ask a question keeps its uncommitted work for the resumed run.
-  if (ok && run.access === 'write' && !question) {
-    verify = runVerify();   // Kraken checks the work itself instead of trusting the agent's summary
-    diff = diffStat();
-    // An update() conflict resolution: never commit leftover conflict markers.
-    const markers = config.sync_base && run.branch ? conflictMarkers() : [];
-    if (markers.length) markerError = `conflict markers are still in: ${markers.join(', ')}; the merge is not finished`;
-    // Worktree runs: commit so the kraken/<run_id> branch holds the work (even if verify failed, for review).
-    // During an update() conflict resolution this commit concludes the merge.
-    if (run.branch && diff && !markerError) {
-      try {
-        git('-c', 'user.name=Kraken', '-c', 'user.email=kraken@localhost', 'commit', '-q',
-          '-m', `kraken(${run.tentacle}/${run.agent}): ${run.task.slice(0, 64)}`,
-          '-m', `run ${runId}${run.plan_id ? `, plan ${run.plan_id}` : ''}${run.resumed_from ? `, resumes ${run.resumed_from}` : ''}`);
-      } catch { /* nothing to commit */ }
-      if (config.sync_base && !hasMergeHead()) {
-        db.prepare('UPDATE runs SET base_sha = ? WHERE branch = ?').run(config.sync_base, run.branch);
-      }
-    }
-  }
-
-  const status = stopReason ?? (!ok || markerError ? 'failed' : question ? 'waiting' : verify && verify.exit !== 0 ? 'verify_failed' : 'done');
-  updateRun(runId, {
-    status,
-    result: p.text || null,
-    question,
-    verdict,
-    native_session: p.nativeSession ?? run.native_session,
-    tokens: p.tokens ? JSON.stringify(p.tokens) : null,
-    cost_usd: p.cost,
-    steps: p.steps,
-    tool_calls: p.toolCalls ? JSON.stringify(p.toolCalls) : null,
-    diff_stat: diff ? JSON.stringify(diff) : null,
-    verify_exit: verify?.exit ?? null,
-    verify_output: verify?.output ?? null,
-    exit_code: code,
-    duration_ms,
-    stop_reason: stopReason === 'over_budget' ? stopDetail : null,
-    error: markerError ?? (ok || stopReason ? null
-      : `exit ${code}: ${[p.error, stderr.trim().slice(-2000)].filter(Boolean).join('\n') || '(no output on stderr; see the log)'}`),
-    finished_at: nowIso(),
-  });
-  if (question) say('question', question, run.agent);
-  say(status, `${status} in ${(duration_ms / 1000).toFixed(1)}s` + (verify ? `, verify exit ${verify.exit}` : '')
-    + (verdict ? `, verdict ${verdict}` : ''), run.agent);
+  finish(code, Date.now() - startedMs);
   pump(); // start the next queued run, if any
   process.exit(0);
 });

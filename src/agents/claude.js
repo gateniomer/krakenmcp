@@ -6,16 +6,16 @@ import { jsonLines, emptyTokens, countTools } from './util.js';
 export default {
   bin: 'claude',
   docs: 'https://code.claude.com/docs/en/cli-reference',
-  defaultModel: { plan: 'opus', execute: 'sonnet' },
+  defaultModel: { read: 'opus', write: 'sonnet' },
   effortNote: 'passed as --effort <low|medium|high|xhigh|max> (levels depend on the model)',
   reports: { cost: true, tokens: true, tool_calls: true },
   budgetArgs: (usd) => ['--max-budget-usd', String(usd)],
-  build(kind, { prompt, model, effort, resumeSession }) {
+  build(access, { prompt, model, effort, resumeSession }) {
     const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose'];
     if (resumeSession) args.push('--resume', resumeSession);
     if (model) args.push('--model', model);
     if (effort) args.push('--effort', effort);
-    args.push('--permission-mode', kind === 'plan' ? 'plan' : 'acceptEdits');
+    args.push('--permission-mode', access === 'read' ? 'plan' : 'acceptEdits');
     return args;
   },
   parse(stdout) {

@@ -83,6 +83,7 @@ export function chainSummary(c) {
       verify: write?.verify_cmd ? { cmd: write.verify_cmd, exit: write.verify_exit ?? undefined } : undefined,
       fix_rounds: `${c.fix_rounds}/${opts.max_fix_rounds}`,
     },
+    now: current,
     last_line: lastAgentText(rows),
     question: status === 'waiting' && !pause ? cur?.question : undefined,
   };
@@ -140,41 +141,44 @@ export function describeChain(c, full = false, live) {
 
 // The card for a chain: every stage with a mark (✓ done, ● now, ◐ paused, ✕ failed, · not yet),
 // what is happening now, and when it ends its result and the next step.
-export function chainCard(c) {
+// The mark of stage i: ✓ done, ● running, ◐ paused or waiting, ✕ failed, ⊘ cancelled, · not yet.
+function stageMark(c, i, status, pause) {
+  if (i < c.stage_index) return '✓';
+  if (i > c.stage_index || pause?.reason === 'approval') return '·';
+  if (pause) return '◐';
+  return { done: '✓', failed: '✕', cancelled: '⊘' }[c.status] ?? (status === 'waiting' ? '◐' : '●');
+}
+
+function pauseText(pause) {
+  if (!pause) return null;
+  return pause.reason === 'approval' ? `after ${pause.after}; resume to continue to ${pause.next_stage}`
+    : `${pause.after} failed verify; resume with a fix instruction, or cancel`;
+}
+
+// The card for a chain: every stage with its mark, what is happening now, and when it ends its
+// result and the next step. Built from the chain's summary.
+export function chainCard(c, sum = chainSummary(c)) {
   const status = chainStatus(c);
   const stages = json(c.stages, []);
   const pause = json(c.pause, null);
   const finished = FINAL.includes(c.status);
-  const markOf = (i) => {
-    if (i < c.stage_index) return '✓';
-    if (i > c.stage_index) return '·';
-    if (pause?.reason === 'approval') return '·';
-    if (pause) return '◐';
-    return { done: '✓', failed: '✕', cancelled: '⊘' }[c.status] ?? (status === 'waiting' ? '◐' : '●');
-  };
   const cur = c.current_run ? getRun(c.current_run) : null;
-  const rows = cur ? recentMessages(cur.id, 50) : [];
   const opts = json(c.options, {});
-  const elapsed = elapsedMs(c.created_at, c.finished_at);
-  const cost = chainRuns(c.id).reduce((a, r) => a + (r.cost_usd ?? 0), 0);
-  const tools = toolCounts(chainToolMessages(c.id));
-  const result = json(c.result, null);
   const write = c.write_run ? getRun(c.write_run) : null;
-  const next = finished || status === 'waiting' ? chainNext(c, status, cur, pause, stages) : null;
+  const fix = opts.max_fix_rounds ? [`fix ${c.fix_rounds}/${opts.max_fix_rounds}`] : [];
   const shown = pause ? (pause.reason === 'approval' ? '◐ paused' : '◐ paused: verify failed') : statusText(status);
-  return box(`🦑 chain ${c.name} › ${c.stage === 'finished' ? stages.at(-1)?.tentacle ?? '' : c.stage}`, shown, [
+  const stage = c.stage === 'finished' ? stages.at(-1)?.tentacle ?? '' : c.stage;
+  return box(`🦑 chain ${c.name} › ${stage}`, shown, [
     ['chain', c.id],
-    ['stages', stages.map((st, i) => `${st.tentacle} ${markOf(i)}`).join(' → '), 2],
-    ['time', timeLine(elapsed, cost, tools, opts.max_fix_rounds ? [`fix ${c.fix_rounds}/${opts.max_fix_rounds}`] : [])],
-    ['now', !finished && !pause && cur ? (status === 'waiting' ? 'question for the developer'
-      : `${cur.tentacle} › ${currentActivity(rows, cur.status)}`) : null],
-    ['question', status === 'waiting' && !pause ? cur?.question : null, 3],
-    ['paused', pause?.reason === 'approval' ? `after ${pause.after}; resume to continue to ${pause.next_stage}`
-      : pause ? `${pause.after} failed verify; resume with a fix instruction, or cancel` : null, 2],
-    ['result', result?.note, 2],
+    ['stages', stages.map((st, i) => `${st.tentacle} ${stageMark(c, i, status, pause)}`).join(' → '), 2],
+    ['time', timeLine(sum.elapsed_s * 1000, sum.cost_usd, sum.tools, fix)],
+    ['now', finished || pause ? null : sum.now],
+    ['question', sum.question, 3],
+    ['paused', pauseText(pause), 2],
+    ['result', json(c.result, null)?.note, 2],
     ['branch', write?.branch && !write.outcome ? write.branch : null],
     ['error', c.error, 2],
-    ['next', next, 3],
+    ['next', finished || status === 'waiting' ? chainNext(c, status, cur, pause, stages) : null, 3],
   ]);
 }
 

@@ -6,12 +6,12 @@ import { jsonLines, emptyTokens, countTools } from './util.js';
 export default {
   bin: 'codex',
   docs: 'https://github.com/openai/codex',
-  defaultModel: { plan: null, execute: null }, // use codex's configured default
+  defaultModel: { read: null, write: null }, // use codex's configured default
   effortNote: 'passed as -c model_reasoning_effort=<effort>',
   reports: { cost: false, tokens: true, tool_calls: true },
-  build(kind, { prompt, model, effort, lastMessageFile, resumeSession }) {
+  build(access, { prompt, model, effort, lastMessageFile, resumeSession }) {
     const args = ['exec', '--json', '--skip-git-repo-check',
-      '--sandbox', kind === 'plan' ? 'read-only' : 'workspace-write',
+      '--sandbox', access === 'read' ? 'read-only' : 'workspace-write',
       '--output-last-message', lastMessageFile];
     if (model) args.push('-m', model);
     if (effort) args.push('-c', `model_reasoning_effort="${effort}"`);

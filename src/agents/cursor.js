@@ -5,14 +5,14 @@ import { jsonLines, countTools } from './util.js';
 export default {
   bin: ['cursor-agent', 'agent'], // the installer provides both; `agent` is a generic name, so prefer cursor-agent
   docs: 'https://cursor.com/docs/cli',
-  defaultModel: { plan: null, execute: null }, // use Cursor's configured default
+  defaultModel: { read: null, write: null }, // use Cursor's configured default
   effortNote: 'not supported by the Cursor CLI; ignored',
   reports: { cost: false, tokens: false, tool_calls: true },
-  build(kind, { prompt, model, resumeSession }) {
+  build(access, { prompt, model, resumeSession }) {
     // ask = read-only Q&A mode; --force allows edits without confirmation; --trust skips the
     // workspace-trust prompt (headless only). --approve-mcps is deliberately NOT passed.
     const args = ['-p', '--output-format', 'stream-json', '--trust'];
-    args.push(...(kind === 'plan' ? ['--mode', 'ask'] : ['--force']));
+    args.push(...(access === 'read' ? ['--mode', 'ask'] : ['--force']));
     if (model) args.push('--model', model);
     if (resumeSession) args.push('--resume', resumeSession);
     args.push(prompt);

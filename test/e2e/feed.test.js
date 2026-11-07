@@ -172,3 +172,15 @@ test('feed: a chain labels lines with their stage and uses one cursor', async ()
   autoChain(false);
   await c.close();
 });
+
+test('status sends progress notifications while it waits', async () => {
+  const c = await h.client({ STUB_SLEEP: '3' });
+  const { run_id } = await c.call('explain', { area: 'progress', cwd: h.repo });
+  const progress = [];
+  const r = await c.c.callTool({ name: 'status', arguments: { run_id, wait_seconds: 20 } }, undefined,
+    { onprogress: (p) => progress.push(p), timeout: 60_000 });
+  assert.equal(JSON.parse(r.content[0].text).status, 'done');
+  assert.ok(progress.length >= 1, 'got progress notifications');
+  assert.match(progress[0].message, /^\[ 🦑 explain › opencode /);
+  await c.close();
+});
