@@ -1,0 +1,9 @@
+#!/bin/sh
+# Fake npm for CLI tests: reports a throwaway global root and records installs instead of running them,
+# so a regression in `krakenmcp update` can never touch the developer's real global packages.
+if [ "$1" = "root" ] && [ "$2" = "-g" ]; then
+  printf '%s\n' "${NPM_FAKE_ROOT:-/nonexistent}"
+  exit 0
+fi
+if [ -n "$NPM_CALL_LOG" ]; then printf '%s\n' "$*" >> "$NPM_CALL_LOG"; fi
+exit 0

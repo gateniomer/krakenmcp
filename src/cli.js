@@ -12,12 +12,14 @@
 //   krakenmcp mode [ask|auto]               show/set approval: auto merges approved, verified, conflict-free branches
 //   krakenmcp show [run_id] [--open|--log]  a run's full result (default: the newest run with one);
 //        --open opens the result file in $VISUAL / $EDITOR, --log prints the raw agent output
+//   krakenmcp update                        reinstall a global git install and print the old -> new version
+//   krakenmcp --version                     print the installed version
 import './quiet.js';
 import { resolve, join } from 'node:path';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, lstatSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { knownNames, resolveTentacle, NAME, userDir, userTentacles, tentacleTemplate, BUILTIN } from './tentacles.js';
-import { PLANS_DIR, LOGS_DIR, db, getRun, setSetting } from './store.js';
+import { PLANS_DIR, LOGS_DIR, ROOT, VERSION, db, getRun, setSetting } from './store.js';
 import { maxParallel } from './scheduler.js';
 import { approvalMode } from './branches.js';
 import { pruneData } from './prune.js';
@@ -32,6 +34,34 @@ const openIt = flag('--open'), showLog = flag('--log');
 const cwd = resolve(opt('--cwd') ?? process.cwd());
 const [cmd, name] = argv;
 const out = (o) => console.log(JSON.stringify(o, null, 2));
+
+const real = (p) => { try { return realpathSync(p); } catch { return null; } };
+const npmGlobalRoot = () => {
+  const r = spawnSync('npm', ['root', '-g'], { encoding: 'utf8' });
+  return r.error || r.status ? null : r.stdout.trim();
+};
+
+// `krakenmcp update`: only global git installs update themselves; a checkout or link must not be overwritten.
+function updateKraken() {
+  const root = real(ROOT) ?? ROOT;
+  const gRoot = npmGlobalRoot();
+  const gPkg = gRoot ? join(real(gRoot) ?? gRoot, 'krakenmcp') : null;
+  let linked = false;
+  try { linked = !!gPkg && lstatSync(gPkg).isSymbolicLink(); } catch { /* no global package */ }
+  if (linked) throw new Error('this is a linked or development install; update it with git, not npm');
+  if (!gPkg || real(gPkg) !== root) {
+    throw new Error(existsSync(join(ROOT, '.git'))
+      ? 'you are running a local checkout; update it with "git pull"'
+      : `not installed under the npm global root${gRoot ? ` (${gRoot})` : ''}; update it however you installed it`);
+  }
+  // npm's output goes to stderr so stdout stays the JSON other commands print.
+  const r = spawnSync('npm', ['install', '-g', 'github:gateniomer/kraken@main'], { stdio: ['inherit', process.stderr, 'inherit'] });
+  if (r.error) throw new Error(`could not run npm: ${r.error.message}`);
+  if (r.status) throw new Error(`npm install exited with status ${r.status}`);
+  let to = VERSION;
+  try { to = JSON.parse(readFileSync(join(gPkg, 'package.json'), 'utf8')).version; } catch { /* keep the old version */ }
+  out({ updated: to !== VERSION, from: VERSION, to, note: 'restart your MCP client: the server starts with the client' });
+}
 
 try {
   switch (cmd) {
@@ -138,8 +168,11 @@ try {
       }
       break;
     }
+    case 'update':
+      updateKraken();
+      break;
     default:
-      console.log('usage: krakenmcp doctor|show|list|edit|remove|limit|mode|prune ' +
+      console.log('usage: krakenmcp doctor|show|list|edit|remove|limit|mode|prune|update|version ' +
         '[args] [--cwd <repo>]');
       process.exit(cmd ? 1 : 0);
   }

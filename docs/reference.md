@@ -150,6 +150,8 @@ krakenmcp remove <name>        # delete that file: your tentacle is gone, a buil
 krakenmcp mode [ask|auto]      # show / set the approval mode (default ask)
 krakenmcp limit [n]            # show / set how many runs may work at once (default 3)
 krakenmcp prune [--older-than 30] [--dry-run] [--worktrees]
+krakenmcp update               # reinstall a global git install; prints the old -> new version
+krakenmcp --version            # print the installed version
 ```
 
 From a source checkout, run `node src/bin.js …` instead of `krakenmcp …`.

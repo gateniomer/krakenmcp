@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.2.0] - 2026-11-07
 
 ### Added
 - `status` now returns a `summary` in every reply: a ready-made `headline`
@@ -12,6 +12,9 @@ All notable changes to this project are documented here. The format follows
   agent's latest line and the waiting question. The head shows the headline and writes a short
   `So far:` / `Now:` line from it above the feed, so the developer can see where the tentacle is at.
   Progress notifications use the same headline.
+- `krakenmcp update` reinstalls the global install from GitHub `main` and reports the old and new
+  version. It refuses to overwrite a source checkout or an `npm link`; `krakenmcp --version` prints
+  the installed version.
 
 ## [1.1.0] - 2026-11-06
 

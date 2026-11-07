@@ -1,9 +1,11 @@
 // End to end: settings (tentacle files) and how MCP sees them, the CLI, show, and prune.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, symlinkSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { setup } from './helpers.js';
 
 let h, k;
@@ -14,6 +16,31 @@ const json = (s) => JSON.parse(s);
 const cliFails = (...a) => {
   try { h.cli(...a); return null; } catch (e) { return `${e.stdout}${e.stderr}`; }
 };
+
+test('cli: --version and version print the installed version', () => {
+  const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8'));
+  assert.equal(h.cli('--version').trim(), pkg.version);
+  assert.equal(h.cli('version').trim(), pkg.version);
+});
+
+test('cli: update refuses a source checkout instead of reinstalling globally', () => {
+  // fakebin/npm makes a regression harmless: it never runs a real global install.
+  assert.match(cliFails('update'), /local checkout|git pull|not installed under the npm global root/);
+});
+
+test('cli: update refuses an npm link and never runs npm install', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kraken-link-'));
+  const log = join(dir, 'calls.log');
+  symlinkSync(fileURLToPath(new URL('../../', import.meta.url)), join(dir, 'krakenmcp'), 'dir');
+  let text;
+  try {
+    execFileSync(process.execPath, [fileURLToPath(new URL('../../src/bin.js', import.meta.url)), 'update'],
+      { cwd: h.repo, encoding: 'utf8', env: { ...h.env, NPM_FAKE_ROOT: dir, NPM_CALL_LOG: log } });
+  } catch (e) { text = `${e.stdout}${e.stderr}`; }
+  assert.match(text ?? '', /linked or development install/);
+  assert.equal(existsSync(log), false, 'npm install never ran');
+  rmSync(dir, { recursive: true, force: true });
+});
 
 test('tentacles shows resolved settings with their sources, installed agents and limits', async () => {
   const t = await k.call('tentacles', { cwd: h.repo });

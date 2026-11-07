@@ -76,8 +76,10 @@ npm install -g github:gateniomer/kraken
 krakenmcp doctor            # optional: check which agents Kraken finds
 ```
 
-This installs straight from GitHub and adds the `krakenmcp` command. To update, run the same
-install again.
+The same command installs and updates Kraken: it installs straight from GitHub and adds the
+`krakenmcp` command, and running it again fetches the latest `main`. A global install can run
+`krakenmcp update` instead. Restart your MCP client afterwards, since the server starts with the
+client.
 
 Then connect it to your head. For OpenCode, add this to `~/.config/opencode/opencode.json`:
 
