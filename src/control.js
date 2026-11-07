@@ -8,7 +8,7 @@ import { alive, killTree } from './platform.js';
 import { pump, queueInfo } from './scheduler.js';
 import { ensureWorktree, tryGit } from './git.js';
 import { parseJson } from './util.js';
-import { startCard } from './runs.js';
+import { startCard } from './feed.js';
 
 export function mustRun(id) {
   const run = getRun(id);

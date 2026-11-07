@@ -27,7 +27,7 @@ import { knownChains, resolveChain, checkChain, userChainDir, userChains, chainT
   BUILTIN_CHAINS } from './chains.js';
 import { pruneData } from './prune.js';
 import { checkAgents } from './agents.js';
-import { agentReport } from './runs.js';
+import { agentReport } from './stats.js';
 
 const argv = process.argv.slice(2);
 const flag = (f) => { const i = argv.indexOf(f); if (i < 0) return false; argv.splice(i, 1); return true; };

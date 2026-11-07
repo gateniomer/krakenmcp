@@ -7,7 +7,7 @@ import { join } from 'node:path';
 
 process.env.KRAKEN_DATA = join(mkdtempSync(join(tmpdir(), 'kraken-next-')), 'data');
 let R;
-before(async () => { R = await import('../../src/runs.js'); });
+before(async () => { R = await import('../../src/view.js'); });
 
 const base = { id: 'r1', tentacle: 'x', kind: 'read', status: 'done', autonomy: 'ask' };
 const cases = [

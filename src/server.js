@@ -12,11 +12,14 @@ import { IN_PROGRESS, getRun, getChain, VERSION } from './store.js';
 import { cancelRun, resumeRun } from './control.js';
 import { mergeRun, discardRun, syncBranch } from './branches.js';
 import { pump, maxParallel } from './scheduler.js';
-import { startChain, cancelChain, resumeChain, describeChain, isChainId, chainStatus, chainFeed,
-  chainSummary, chainCard } from './chain.js';
+import { startChain, cancelChain, resumeChain, isChainId } from './chain.js';
+import { describeChain, chainStatus, chainFeed, chainSummary, chainCard } from './chain-view.js';
 import { knownChains, resolveChain, checkChain, userChainDir, userChains } from './chains.js';
 import { resolveTentacle, knownNames, userDir, userTentacles } from './tentacles.js';
-import { startRun, describe, sessionSummary, clip, agentReport, runFeed, runSummary, runCard } from './runs.js';
+import { startRun } from './runs.js';
+import { describe, clip } from './view.js';
+import { runFeed, runSummary, runCard } from './feed.js';
+import { sessionSummary, agentReport } from './stats.js';
 
 const INSTRUCTIONS = `Kraken delegates work to other headless coding agents. Each action is a "tentacle"; you are the head
 (the agent the developer talks to) that sends work to them.

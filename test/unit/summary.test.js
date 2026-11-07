@@ -7,7 +7,7 @@ import { join } from 'node:path';
 
 const dir = mkdtempSync(join(tmpdir(), 'kraken-summary-'));
 process.env.KRAKEN_DATA = dir; // store.js opens its DB when runs.js is imported
-const m = await import('../../src/runs.js');
+const m = await import('../../src/feed.js');
 after(() => rmSync(dir, { recursive: true, force: true }));
 
 test('elapsedText: seconds, minutes, unknown', () => {
