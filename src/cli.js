@@ -33,7 +33,7 @@ import { knownChains, resolveChain, checkChain, userChainDir, userChains, chainT
 import { pruneData } from './prune.js';
 import { checkAgents } from './agents.js';
 import { agentReport } from './stats.js';
-import { parseJson, fail } from './util.js';
+import { parseJson, fail, isInside } from './util.js';
 
 const argv = process.argv.slice(2);
 const flag = (f) => { const i = argv.indexOf(f); if (i < 0) return false; argv.splice(i, 1); return true; };
@@ -117,6 +117,7 @@ function removeFile(kind, n) {
     fail(f.builtin(n) ? `${n} has no changes to remove; it is already the built-in`
       : `no ${kind} ${n} (no ${file})`);
   }
+  if (!isInside(f.dir(), file)) fail(`refusing to delete ${file}: it is outside ${f.dir()}`);
   rmSync(file);
   out({ removed: file, note: f.builtin(n) ? `${n} is back to ${f.reset}` : `${n} is gone` });
 }

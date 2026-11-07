@@ -28,3 +28,12 @@ test('krakenmcp update installs this repository with a valid npm git spec', asyn
   assert.ok(m, `${INSTALL_SPEC} is not github:<owner>/<repo>#<branch>`);
   assert.ok(pkg.repository.url.includes(`github.com/${m[1]}/${m[2]}.git`), 'same repository as package.json');
 });
+
+test('isInside: the guard every delete uses', async () => {
+  const { isInside } = await import('../../src/util.js');
+  assert.equal(isInside('/home/u/.kraken', '/home/u/.kraken/logs/a.log'), true);
+  assert.equal(isInside('/home/u/.kraken', '/home/u/.kraken'), false, 'never the folder itself');
+  assert.equal(isInside('/home/u/.kraken', '/home/u/.kraken/../.ssh/id_rsa'), false);
+  assert.equal(isInside('/home/u/.kraken', '/home/u/.kraken-other/x'), false, 'a prefix is not inside');
+  assert.equal(isInside('/home/u/.kraken', '/etc/passwd'), false);
+});

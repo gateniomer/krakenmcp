@@ -1,4 +1,5 @@
 // Small helpers shared across modules.
+import { resolve, relative, isAbsolute } from 'node:path';
 
 // JSON.parse that never throws: unreadable or empty text gives `fallback`.
 export function parseJson(text, fallback = undefined) {
@@ -22,6 +23,13 @@ export function pageAll(fetch, since = 0, size = 200) {
     if (rows.length < size) return out;
     after = rows.at(-1).id;
   }
+}
+
+// True when `path` is strictly inside `dir` (never dir itself, never via ".."): the check every
+// delete makes before it removes anything.
+export function isInside(dir, path) {
+  const rel = relative(resolve(dir), resolve(path));
+  return !!rel && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
 // Throw an Error with this message; usable as an expression (`x ?? fail('…')`).

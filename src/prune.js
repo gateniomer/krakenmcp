@@ -1,8 +1,9 @@
 // krakenmcp prune: old logs/result files, oversized stored prompts, and abandoned worktrees.
 import { existsSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { LOGS_DIR, PLANS_DIR, WORKTREES_DIR, db } from './store.js';
+import { DATA_DIR, LOGS_DIR, PLANS_DIR, WORKTREES_DIR, db } from './store.js';
 import { discardRun } from './branches.js';
+import { isInside } from './util.js';
 
 export function pruneData({ olderThanDays = 30, dryRun = false, worktrees = false } = {}) {
   const cutoff = new Date(Date.now() - olderThanDays * 86_400_000).toISOString();
@@ -14,7 +15,7 @@ export function pruneData({ olderThanDays = 30, dryRun = false, worktrees = fals
   for (const { id } of old) {
     const logs = [`${id}.log`, `${id}.last.txt`].map((n) => join(LOGS_DIR, n));
     for (const f of [...logs, join(PLANS_DIR, `${id}.md`)]) {
-      if (!existsSync(f)) continue;
+      if (!existsSync(f) || !isInside(DATA_DIR, f)) continue; // never delete outside ~/.kraken
       report.files_removed++; report.bytes_freed += statSync(f).size;
       if (!dryRun) rmSync(f);
     }

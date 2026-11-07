@@ -2,10 +2,11 @@
 // agent on PATH, and an MCP client that starts the real server through the `krakenmcp` entry point.
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, delimiter } from 'node:path';
+import { join, delimiter, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
+import { isInside } from '../../src/util.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
@@ -89,11 +90,35 @@ export function setup() {
     },
     async cleanup() {
       for (const c of h.clients) await c.close().catch(() => {});
+      stopLeftovers(h);
       db?.close();
+      // Only ever delete the folder setup() created in the system temp dir.
+      if (!isInside(tmpdir(), root) || !basename(root).startsWith('kraken-e2e-')) {
+        throw new Error(`refusing to delete ${root}`);
+      }
+      rmSync(root, { recursive: true, force: true });
+      // A worker spawned just before a cancel may still be starting: it opens the store (recreating
+      // the data dir), sees the run was cancelled and exits. Give it a moment, then remove it again.
+      await sleep(1500);
       rmSync(root, { recursive: true, force: true });
     },
   };
   return h;
 }
 
-export const commitsOn = (h, branch) => h.git('log', '--oneline', `main..${branch}`).split('\n').filter(Boolean).length;
+// Chain drivers, workers and agents a test left running would keep going after the test, and
+// recreate the deleted data dir: stop them before it is removed.
+function stopLeftovers(h) {
+  if (!existsSync(join(h.env.KRAKEN_DATA, 'kraken.db'))) return;
+  const kill = (pid, group = false) => { try { process.kill(group ? -pid : pid, 'SIGKILL'); } catch { /* gone */ } };
+  const db = h.db();
+  for (const { pid } of db.prepare("SELECT pid FROM chains WHERE pid > 0 AND status IN ('running', 'waiting')").all()) {
+    kill(pid);
+  }
+  for (const r of db.prepare("SELECT pid, agent_pid FROM runs WHERE status IN ('queued', 'running')").all()) {
+    if (r.agent_pid > 0) kill(r.agent_pid, true); // the agent's whole process group
+    if (r.pid > 0) kill(r.pid);
+  }
+}
+
+export const commitsOn =(h, branch) => h.git('log', '--oneline', `main..${branch}`).split('\n').filter(Boolean).length;
