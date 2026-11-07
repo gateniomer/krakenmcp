@@ -67,6 +67,30 @@ Supported agents: [Claude Code](https://code.claude.com/docs), [OpenCode](https:
 [Codex](https://github.com/openai/codex) (untested), [Cursor CLI](https://cursor.com/docs/cli)
 (untested), [Aider](https://aider.chat) (untested).
 
+## Chains
+
+A chain runs a list of tentacle stages by itself: `chain(task)`. The built-in `default` chain is
+plan → execute → review. After each stage whose autonomy is `ask` the chain pauses and the head asks
+you whether to go on, so on a fresh install it pauses after plan and after execute. When a review
+requests changes or `verify` fails, the chain sends the work back to the agent ("fix rounds") without
+pausing, up to `max_fix_rounds` (default 1; `0` turns them off).
+
+Write your own in `~/.kraken/chains/<name>.md`:
+
+```markdown
+---
+description: Plan and implement on my own, then let me look before the review
+stages: [{"tentacle": "plan", "autonomy": "auto"}, {"tentacle": "execute"}, {"tentacle": "review"}]
+max_fix_rounds: 2
+---
+```
+
+```sh
+krakenmcp chain list            # every chain, its stages and their autonomy
+krakenmcp chain edit <name>     # open your file for it (created if missing), then check it
+krakenmcp chain remove <name>   # delete your file; a built-in goes back to its defaults
+```
+
 ## Install
 
 You need Node.js 22.13+, git, and at least one supported agent CLI, installed and logged in.
@@ -178,30 +202,6 @@ Some things always stop, whatever the autonomy: a question for you, a failed, ti
 over-budget run, a failed `verify`, and `discard`. "Work in auto this session" only changes how
 the head behaves until you say otherwise; nothing is stored, and it never gets past these stops or
 the merge checks.
-
-## Chains
-
-A chain runs a list of tentacle stages by itself: `chain(task)`. The built-in `default` chain is
-plan → execute → review. After each stage whose autonomy is `ask` the chain pauses and the head asks
-you whether to go on, so on a fresh install it pauses after plan and after execute. When a review
-requests changes or `verify` fails, the chain sends the work back to the agent ("fix rounds") without
-pausing, up to `max_fix_rounds` (default 1; `0` turns them off).
-
-Write your own in `~/.kraken/chains/<name>.md`:
-
-```markdown
----
-description: Plan and implement on my own, then let me look before the review
-stages: [{"tentacle": "plan", "autonomy": "auto"}, {"tentacle": "execute"}, {"tentacle": "review"}]
-max_fix_rounds: 2
----
-```
-
-```sh
-krakenmcp chain list            # every chain, its stages and their autonomy
-krakenmcp chain edit <name>     # open your file for it (created if missing), then check it
-krakenmcp chain remove <name>   # delete your file; a built-in goes back to its defaults
-```
 
 ## Other settings
 
