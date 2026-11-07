@@ -9,11 +9,13 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { newId, nowIso, getRun, insertPipeline, getPipeline, updatePipeline, resumedBy, IN_PROGRESS,
-  pipelineMessagesSince, pipelineMessagesSinceAll, lastPipelineMessageId, pipelineRuns } from './store.js';
+  pipelineMessagesSince, pipelineMessagesSinceAll, lastPipelineMessageId, pipelineRuns, recentMessages,
+  pipelineToolMessages } from './store.js';
 import { startNode } from './scheduler.js';
 import { cancelRun, resumeRun } from './control.js';
 import { mergeRun, approvalMode } from './branches.js';
-import { startRun, describe, runLabel, renderFeed, STOP_NEXT } from './runs.js';
+import { startRun, describe, runLabel, renderFeed, STOP_NEXT, headline, toolCounts,
+  currentActivity, lastAgentText, modelOf } from './runs.js';
 
 export const isPipelineId = (id) => typeof id === 'string' && id.startsWith('pipe_');
 
@@ -77,6 +79,38 @@ export function pipelineFeed(p, since = 0, all = false) {
   const showId = p.current_run ?? p.exec_run ?? p.plan_run ?? rows.at(-1)?.run_id ?? p.id;
   return { feed: renderFeed(rows, labelOf, showId),
     cursor: rows.length ? rows.at(-1).id : Math.max(since, lastPipelineMessageId(p.id)) };
+}
+
+// The live summary for a pipeline: the same shape a run returns, aggregated over its steps.
+export function pipelineSummary(p) {
+  const status = pipelineStatus(p);
+  const cur = p.current_run ? getRun(p.current_run) : null;
+  const tools = toolCounts(pipelineToolMessages(p.id));
+  const rows = cur ? recentMessages(cur.id, 50) : [];
+  const dateOf = (s) => new Date(s.includes('T') ? s : `${s.replace(' ', 'T')}Z`);
+  const elapsed = p.created_at ? (p.finished_at ? dateOf(p.finished_at) : new Date()) - dateOf(p.created_at) : undefined;
+  const cost = pipelineRuns(p.id).reduce((a, r) => a + (r.cost_usd ?? 0), 0) || undefined;
+  const opts = JSON.parse(p.options);
+  const exec = p.exec_run ? getRun(p.exec_run) : null;
+  const current = status === 'waiting' ? 'question for the developer'
+    : cur ? `${cur.tentacle} › ${currentActivity(rows, cur.status)}` : (p.stage ?? 'starting');
+  const identity = `pipeline › stage ${p.stage}`;
+  return {
+    kind: 'pipeline',
+    headline: headline(identity, status, elapsed, tools, current),
+    key: headline(identity, status, undefined, tools, current), // no time: progress-notification dedupe
+    stage: p.stage, status,
+    tentacle: cur?.tentacle, agent: cur?.agent, model: cur ? modelOf(cur) : undefined,
+    elapsed_s: elapsed === undefined ? undefined : Math.round(elapsed / 1000),
+    cost_usd: cost, tools: tools.total ? tools : undefined,
+    milestones: {
+      plan_done: !!p.plan_run, execute_done: !!p.exec_run, review_done: !!p.review_run,
+      verify: exec?.verify_cmd ? { cmd: exec.verify_cmd, exit: exec.verify_exit ?? undefined } : undefined,
+      fix_rounds: `${p.fix_rounds}/${opts.max_fix_rounds}`,
+    },
+    last_line: lastAgentText(rows),
+    question: status === 'waiting' ? cur?.question : undefined,
+  };
 }
 
 export function describePipeline(p, full = false, live) {

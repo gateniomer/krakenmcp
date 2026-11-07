@@ -49,6 +49,34 @@ test('feed: compact while running, full result with the last lines when done', a
   await c.close();
 });
 
+test('feed: a live summary headline and facts ride above the feed', async () => {
+  const c = await h.client({ STUB_LINES: '3', STUB_SLEEP: '8' });
+  const { run_id } = await c.call('explain', { area: 'summary', cwd: h.repo });
+  let running = await c.call('status', { run_id, wait_seconds: 1, since: 0 });
+  // The stub emits its events at once but startup timing varies; wait for all 6 tool lines.
+  for (let i = 0; i < 5 && (running.summary?.tools?.total ?? 0) < 6; i++) {
+    running = await c.call('status', { run_id, wait_seconds: 1, since: 0 });
+  }
+  assert.equal(running.status, 'running');
+  const s = running.summary;
+  assert.ok(s, 'a running reply carries a summary');
+  const model = h.row(run_id).model ?? 'default';
+  assert.ok(s.headline.startsWith(`[ 🦑 explain › opencode ${model} ]  ● running  `), s.headline);
+  assert.ok(s.headline.includes('6 tools'), s.headline);
+  assert.equal(s.tools.total, 6);
+  assert.equal(s.tools.by_name.write, 6);
+  assert.match(s.last_line, /^Done \(resumed=no\)\./);
+  assert.equal(s.kind, 'run');
+  assert.equal(s.status, 'running');
+  assert.equal(s.milestones.verify, undefined, 'a read run has no verify milestone');
+  assert.ok(s.elapsed_s >= 0);
+  const done = (await follow(c, run_id, running.cursor)).at(-1);
+  assert.match(done.summary.headline, /✓ done/);
+  const plain = await c.call('status', { run_id });
+  assert.ok(plain.summary, 'the full reply carries the summary too');
+  await c.close();
+});
+
 test('feed: tool calls fold into one quiet line under the text line', async () => {
   const c = await h.client({ STUB_LINES: '3' });
   const { run_id } = await c.call('explain', { area: 'tools', cwd: h.repo });
@@ -118,6 +146,8 @@ test('feed: a running pipeline can be followed with since and progress notificat
   assert.equal(s.status, 'running');
   assert.ok(s.cursor > 0, 'the running pipeline returns a cursor');
   assert.ok(Array.isArray(s.feed), 'a running pipeline returns a feed');
+  assert.match(s.summary.headline, /^\[ 🦑 pipeline › stage \w+ \]/);
+  assert.ok(s.summary.milestones, 'the pipeline summary carries its milestones');
   const { notes } = await c.callProgress('status', { run_id: pipeline_id, wait_seconds: 3, since: s.cursor });
   assert.ok(notes.length > 0, 'progress notifications fire while waiting');
   await c.wait(pipeline_id);

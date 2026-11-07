@@ -23,6 +23,7 @@ test('pipeline: plan -> execute -> review, stops before merge with the merge as 
   const s = await waitPipeline(k, p.pipeline_id);
   assert.equal(s.status, 'done', s.error);
   assert.equal(s.result.verdict, 'approve');
+  assert.deepEqual(s.summary.milestones.verify, { cmd: 'node -e "process.exit(0)"', exit: 0 });
   assert.ok(s.runs.plan && s.runs.execute && s.runs.review);
   assert.equal(h.row(s.runs.execute).plan_id, s.runs.plan);
   assert.equal(h.row(s.runs.review).target_run, s.runs.execute);
@@ -160,7 +161,7 @@ test('status sends progress notifications while it waits', async () => {
     { onprogress: (p) => progress.push(p), timeout: 60_000 });
   assert.equal(JSON.parse(r.content[0].text).status, 'done');
   assert.ok(progress.length >= 1, 'got progress notifications');
-  assert.match(progress[0].message, /explain tentacle \(opencode /);
+  assert.match(progress[0].message, /^\[ 🦑 explain › opencode /);
   await c.close();
 });
 

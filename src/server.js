@@ -8,21 +8,24 @@ import { createServer } from './mcp.js';
 import { str, num, int, bool, oneOf, list, obj } from './schema.js';
 import { resolve } from 'node:path';
 import { agentInfo, checkAgents, AGENTS } from './agents.js';
-import { IN_PROGRESS, getRun, getPipeline, lastMessageId, lastPipelineMessageId, pipelineRuns, VERSION } from './store.js';
+import { IN_PROGRESS, getRun, getPipeline, VERSION } from './store.js';
 import { cancelRun, resumeRun } from './control.js';
 import { mergeRun, discardRun, syncBranch } from './branches.js';
 import { pump, maxParallel } from './scheduler.js';
 import { approvalMode } from './branches.js';
-import { startPipeline, cancelPipeline, describePipeline, isPipelineId, pipelineStatus, pipelineFeed } from './pipeline.js';
+import { startPipeline, cancelPipeline, describePipeline, isPipelineId, pipelineStatus, pipelineFeed,
+  pipelineSummary } from './pipeline.js';
 import { resolveTentacle, knownNames, userDir, userTentacles } from './tentacles.js';
-import { startRun, describe, sessionSummary, clip, agentReport, runFeed, runLabel } from './runs.js';
+import { startRun, describe, sessionSummary, clip, agentReport, runFeed, runSummary } from './runs.js';
 
 const INSTRUCTIONS = `Kraken delegates work to other headless coding agents. Each action is a "tentacle"; you are the head
 (the agent the developer talks to) that sends work to them.
 Runs are asynchronous: every start tool returns a run_id at once. Then call status(run_id, wait_seconds: 50, since: 0),
-and on each later call pass the cursor it returned as since. While the run is in progress, show the developer the
-returned feed lines as they are (in a code block, one per line, nothing added) before the next status call. When
-status is "waiting", ask the developer the question and resume. Do not poll faster.
+and on each later call pass the cursor it returned as since. While a run or pipeline is in progress, status returns a
+summary plus new feed lines. Show the developer: (1) summary.headline as-is; (2) one or two short lines written for a
+human, "So far: …" from stage/milestones/tools and "Now: …" from last_line or question, never inventing progress that
+is not in summary; (3) the feed lines as they are in a code block, one per line, nothing added. Then call status again.
+When status is "waiting", ask the developer the question and resume. Do not poll faster.
 
 Feature flow:
 1. Discuss the feature with the developer yourself; you are the one who advises them.
@@ -140,39 +143,42 @@ server.tool('status', {
   let item = load();
   if (!item) return fail(`no ${pipe ? 'pipeline' : 'run'} ${run_id}`);
   const started = Date.now(), deadline = started + wait_seconds * 1000;
-  let lastNote = null;
+  let lastKey = null;
   while (busy(item) && Date.now() < deadline) {
     await sleep(1000);
     item = load();
     if (progress) {
-      const note = progressNote(pipe ? item.current_run : run_id, pipe ? item.stage : null, pipe ? run_id : null);
-      if (note !== lastNote || (Date.now() - started) % 10_000 < 1000) {
-        lastNote = note;
-        progress(Math.round((Date.now() - started) / 1000), note);
+      const live = progressNote(pipe ? item.current_run : run_id, pipe ? item.stage : null, pipe ? run_id : null);
+      const key = live?.key ?? live?.headline;
+      if (key && (key !== lastKey || (Date.now() - started) % 10_000 < 1000)) {
+        lastKey = key;
+        progress(Math.round((Date.now() - started) / 1000), live.headline);
       }
     }
   }
-  if (since === undefined) return text(pipe ? describePipeline(item, full) : describe(item, full));
+  const sum = pipe ? pipelineSummary(item) : runSummary(item);
+  if (since === undefined) {
+    return text(pipe ? { ...describePipeline(item, full), summary: sum }
+      : { ...describe(item, full), summary: sum });
+  }
   const live = pipe ? pipelineFeed(item, since, !busy(item)) : runFeed(item, since, !busy(item));
   if (busy(item)) { // compact reply: only what the head shows to the developer
-    const cur = pipe ? (item.current_run && getRun(item.current_run)) : item;
-    const t0 = item.started_at ?? item.created_at;
-    return text({ id: item.id, status: pipe ? pipelineStatus(item) : item.status, stage: pipe ? item.stage : undefined,
-      elapsed_s: t0 ? Math.round((Date.now() - new Date(t0.includes('T') ? t0 : `${t0.replace(' ', 'T')}Z`)) / 1000) : undefined,
-      cost_usd: pipe ? pipelineRuns(item.id).reduce((a, r) => a + (r.cost_usd ?? 0), 0) || undefined : item.cost_usd ?? undefined, feed: live.feed, cursor: live.cursor,
-      next: `show the feed lines to the developer as they are, then call status again with since: ${live.cursor}` });
+    return text({ id: item.id, status: sum.status, stage: sum.stage, elapsed_s: sum.elapsed_s, cost_usd: sum.cost_usd,
+      summary: sum, feed: live.feed, cursor: live.cursor,
+      next: `show summary.headline as-is, then one or two short lines for the developer ("So far: …" from stage/milestones/tools and "Now: …" from last_line or question), then the feed lines as they are; call status again with since: ${live.cursor}` });
   }
-  return text(pipe ? describePipeline(item, full, live) : { ...describe(item, full), ...live });
+  return text(pipe ? { ...describePipeline(item, full, live), summary: sum }
+    : { ...describe(item, full), ...live, summary: sum });
 });
 
-// Latest feed line of a run or pipeline, for progress notifications.
+// The live summary of a run or pipeline, for progress notifications (key = headline without time).
 function progressNote(runId, stage, pipelineId) {
-  if (!runId) return stage ?? 'starting';
-  const run = getRun(runId);
-  const live = pipelineId
-    ? pipelineFeed(getPipeline(pipelineId), Math.max(0, lastPipelineMessageId(pipelineId) - 1))
-    : runFeed(run, Math.max(0, lastMessageId(runId) - 1));
-  return live.feed.at(-1)?.trim() ?? `${runLabel(run)}: ${run?.status ?? 'running'}`;
+  if (pipelineId) {
+    const p = getPipeline(pipelineId);
+    return p ? pipelineSummary(p) : null;
+  }
+  const run = runId ? getRun(runId) : null;
+  return run ? runSummary(run, stage) : null;
 }
 
 server.tool('resume', {

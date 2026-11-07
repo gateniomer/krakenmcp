@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `status` now returns a `summary` in every reply: a ready-made `headline`
+  (`[ 🦑 plan › claude opus ]  ● running  42s    6 tools   using read`), tool counts, milestones, the
+  agent's latest line and the waiting question. The head shows the headline and writes a short
+  `So far:` / `Now:` line from it above the feed, so the developer can see where the tentacle is at.
+  Progress notifications use the same headline.
+
 ## [1.1.0] - 2026-11-06
 
 ### Added

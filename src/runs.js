@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { resolveAgent, AGENTS } from './agents.js';
 import {
   PLANS_DIR, LOGS_DIR, WORKTREES_DIR, IN_PROGRESS, newId, insertRun, getRun, recentMessages, messagesSince,
-  messagesSinceAll, lastMessageId, allRuns, latestReview, listRuns, listPipelines, db,
+  messagesSinceAll, lastMessageId, allRuns, latestReview, listRuns, listPipelines, toolMessages, db,
 } from './store.js';
 import { pump, queueInfo } from './scheduler.js';
 import { reviewInput, gitIn } from './branches.js';
@@ -87,10 +87,14 @@ const squash = (s, n = 200) => {
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 };
 
+// The model a run uses; falls back to the agent's default for that access.
+export function modelOf(run) {
+  return run.model ?? AGENTS[run.agent]?.defaultModel?.[run.access === 'read' ? 'plan' : 'execute'] ?? 'default';
+}
+
 // "plan tentacle (claude opus)"; the model falls back to the agent's default for that access.
 export function runLabel(run, stage) {
-  const model = run.model ?? AGENTS[run.agent]?.defaultModel?.[run.access === 'read' ? 'plan' : 'execute'] ?? 'default';
-  return `${stage ? `${stage} › ` : ''}${run.tentacle} tentacle (${run.agent} ${model})`;
+  return `${stage ? `${stage} › ` : ''}${run.tentacle} tentacle (${run.agent} ${modelOf(run)})`;
 }
 
 // rows: messages in id order; labelOf(run_id) gives each run's label. Returns the lines to show
@@ -129,6 +133,89 @@ export function runFeed(run, since = 0, all = false) {
   const rows = all ? messagesSinceAll(run.id, since) : messagesSince(run.id, since);
   const label = runLabel(run);
   return { feed: renderFeed(rows, () => label, run.id), cursor: rows.length ? rows.at(-1).id : Math.max(since, lastMessageId(run.id)) };
+}
+
+// ---- live summary: the headline the head shows above the feed, plus the state it writes
+// "So far / Now" from. Rendering the sentence is the head's job (it knows the task); Kraken
+// only supplies facts, so the summary is deterministic and costs no extra model call. ----
+
+const STATUS_GLYPH = {
+  queued: '○', running: '●', waiting: '◐', done: '✓', failed: '✕', cancelled: '⊘',
+  timeout: '✕', over_budget: '✕', verify_failed: '✕',
+};
+
+export function elapsedText(ms) {
+  if (ms === undefined || ms === null || Number.isNaN(ms)) return '—';
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+}
+
+export function toolCounts(rows) {
+  const by = new Map();
+  for (const m of rows) {
+    const name = m.body.slice(6).trim() || 'unknown';
+    by.set(name, (by.get(name) ?? 0) + 1);
+  }
+  return { total: [...by.values()].reduce((a, b) => a + b, 0), by_name: Object.fromEntries(by) };
+}
+
+// The newest thing the agent said or did, for the headline's last column.
+export function currentActivity(rows, status) {
+  if (status === 'waiting') return 'question for the developer';
+  const last = rows.at(-1);
+  if (!last) return status === 'queued' ? 'queued' : 'starting';
+  if (last.kind === 'question') return 'question for the developer';
+  const body = last.body ?? '';
+  if (last.kind === 'progress') {
+    if (body.startsWith('tool: ')) return `using ${body.slice(6).trim()}`;
+    const lifecycle = /^(started|resumed)\b/.exec(body);
+    if (lifecycle && last.sender === 'kraken') return lifecycle[0];
+  }
+  return squash(body, 40) || status;
+}
+
+// Pad to a column width, but never let a full column touch the next one.
+const column = (s, width) => (s.length >= width ? `${s} ` : s.padEnd(width));
+
+export function headline(identity, status, elapsedMs, tools, current) {
+  const stat = column(`${STATUS_GLYPH[status] ?? '●'} ${status}`, 11);
+  const time = column(elapsedText(elapsedMs), 7);
+  const count = tools?.total ? `${tools.total} tool${tools.total === 1 ? '' : 's'}` : '—';
+  return `[ 🦑 ${identity} ]  ${stat}${time}${count}${current ? `   ${current}` : ''}`;
+}
+
+// The latest line the agent itself wrote (not a tool line, not Kraken's own messages).
+export function lastAgentText(rows) {
+  const last = [...rows].reverse().find((x) => x.kind === 'progress'
+    && x.sender !== 'kraken' && !(x.body ?? '').startsWith('tool: '));
+  return last ? squash(last.body, 200) : undefined;
+}
+
+export function runSummary(run, stage) {
+  const rows = recentMessages(run.id, 50);
+  const tools = toolCounts(toolMessages(run.id));
+  const m = metrics(run);
+  const current = currentActivity(rows, run.status);
+  const identity = `${run.tentacle} › ${run.agent} ${modelOf(run)}`;
+  return {
+    kind: 'run',
+    headline: headline(identity, run.status, m.duration_ms, tools, current),
+    key: headline(identity, run.status, undefined, tools, current), // no time: progress-notification dedupe
+    stage: stage ?? undefined,
+    tentacle: run.tentacle, agent: run.agent, model: modelOf(run),
+    status: run.status,
+    elapsed_s: m.duration_ms === undefined ? undefined : Math.round(m.duration_ms / 1000),
+    cost_usd: run.cost_usd ?? undefined,
+    tools: tools.total ? tools : undefined,
+    milestones: {
+      plan_id: run.plan_id ?? undefined,
+      verify: run.verify_cmd ? { cmd: run.verify_cmd, exit: run.verify_exit ?? undefined } : undefined,
+      resumed_from: run.resumed_from ?? undefined,
+    },
+    last_line: lastAgentText(rows),
+    question: run.status === 'waiting' ? run.question : undefined,
+  };
 }
 
 // Create and start a run of any tentacle.

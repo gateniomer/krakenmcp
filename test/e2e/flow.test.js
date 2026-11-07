@@ -35,6 +35,7 @@ test('think -> plan with context -> execute -> review -> merge lands the change'
   assert.match(execRun.branch, /^kraken\/execute_/);
   assert.equal(commitsOn(h, execRun.branch), 1);
   assert.equal(execRun.verify.exit, 0);
+  assert.deepEqual(execRun.summary.milestones.verify, { cmd: 'echo verify-ok', exit: 0 });
   assert.deepEqual(execRun.metrics.diff, { files: 1, insertions: 1, deletions: 0 });
   assert.equal(existsSync(join(h.repo, 'feature.js')), false, 'main checkout untouched before merge');
 

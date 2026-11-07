@@ -83,6 +83,14 @@ to stop: it reports the error to the developer and does not retry on another age
 
 `status` takes `since`, a cursor (a message id; start with `0`). It returns:
 
+- `summary`: the live state, so the head can show where the tentacle is at above the feed. It is returned in
+  every reply, in progress or finished. `headline` is a ready-made one-liner
+  (`[ 🦑 plan › claude opus ]  ● running  42s    6 tools   using read`); `kind` is `run` or `pipeline`;
+  `tools` is a count and per-name breakdown; `last_line` is the agent's own latest text; `question` is set
+  while waiting; plus `status`, `elapsed_s`, `cost_usd` and `stage` (pipelines only). `milestones` has
+  `plan_id` / `verify` / `resumed_from` for a run and `plan_done` / `execute_done` / `review_done` /
+  `verify` / `fix_rounds` for a pipeline (`verify` is `{ cmd, exit }` in both). The head writes one or two
+  human lines from it (`So far: …`, `Now: …`) and shows `headline` as it is.
 - `feed`: ready-made lines for the progress made after `since`, which the head shows to the developer as
   they are, e.g. `plan tentacle (claude opus): "Reading src/server.js…"`. Tool calls are folded into one
   line (`  · tools: Read ×3, Grep`). Text is cut at 200 characters. At most 12 lines per reply; older ones
@@ -92,10 +100,10 @@ to stop: it reports the error to the developer and does not retry on another age
   carries `cursor`.
 
 While the run or pipeline is in progress and `since` is given, the reply is compact: `id`, `status`,
-`stage` (pipelines), `elapsed_s`, `cost_usd`, `feed`, `cursor`, `next`. Once it ends (or is `waiting` on a
-question) the reply is the full one plus the last `feed` and `cursor`. Without `since` the reply is
-unchanged apart from `cursor`; run and pipeline replies both carry one, so following can start at any
-time. Codex runs only show lifecycle lines.
+`stage` (pipelines), `elapsed_s`, `cost_usd`, `summary`, `feed`, `cursor`, `next`. Once it ends (or is `waiting` on a
+question) the reply is the full one plus the last `feed` and `cursor`. Every reply carries `summary`; without `since`
+the reply is otherwise unchanged apart from `cursor`; run and pipeline replies both carry one, so following can start
+at any time. Codex runs only show lifecycle lines.
 
 ## Tentacle fields and settings layers
 

@@ -188,6 +188,12 @@ export const lastPipelineMessageId = (pid) =>
   db.prepare('SELECT MAX(m.id) AS id FROM messages m JOIN runs r ON r.id = m.run_id WHERE r.pipeline_id = ?').get(pid)?.id ?? 0;
 export const pipelineRuns = (pid) =>
   db.prepare('SELECT id, tentacle, resumed_from, config, cost_usd FROM runs WHERE pipeline_id = ? ORDER BY created_at, rowid').all(pid);
+// Every tool line of a run (or of all runs of a pipeline), for the live summary's tool count.
+export const toolMessages = (runId) =>
+  db.prepare("SELECT body FROM messages WHERE run_id = ? AND kind = 'progress' AND body LIKE 'tool: %' ORDER BY id").all(runId);
+export const pipelineToolMessages = (pid) =>
+  db.prepare(`SELECT m.body FROM messages m JOIN runs r ON r.id = m.run_id
+              WHERE r.pipeline_id = ? AND m.kind = 'progress' AND m.body LIKE 'tool: %' ORDER BY m.id`).all(pid);
 
 export const listRuns = (session, limit = 20) =>
   db.prepare(`SELECT id, tentacle, access, plan_id, agent, model, effort, status, outcome, verdict, duration_ms, cost_usd,
