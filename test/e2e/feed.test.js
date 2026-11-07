@@ -60,7 +60,7 @@ test('feed: a live summary headline and facts ride above the feed', async () => 
   assert.equal(running.status, 'running');
   const s = running.summary;
   assert.ok(s, 'a running reply carries a summary');
-  const model = h.row(run_id).model ?? 'default';
+  const model = (h.row(run_id).model ?? 'default').split('/').at(-1);
   assert.ok(s.headline.startsWith(`[ 🦑 explain › opencode ${model} ]  ● running  `), s.headline);
   assert.ok(s.headline.includes('6 tools'), s.headline);
   assert.equal(s.tools.total, 6);
@@ -150,7 +150,7 @@ test('feed: a running chain can be followed with since and progress notification
   assert.equal(s.status, 'running');
   assert.ok(s.cursor > 0, 'the running chain returns a cursor');
   assert.ok(Array.isArray(s.feed), 'a running chain returns a feed');
-  assert.match(s.summary.headline, /^\[ 🦑 chain default › stage \w+ \]/);
+  assert.match(s.summary.headline, /^\[ 🦑 chain default › plan [✓●] → execute [·●] → review [·●] \]/);
   assert.match(s.summary.milestones.stages, /^\d of 3$/);
   const { notes } = await c.callProgress('status', { run_id: chain_id, wait_seconds: 3, since: s.cursor });
   assert.ok(notes.length > 0, 'progress notifications fire while waiting');

@@ -1,11 +1,13 @@
 Kraken delegates work to other headless coding agents. Each action is a "tentacle"; you are the head
 (the agent the developer talks to) that sends work to them.
-Runs are asynchronous: every start tool returns a run_id at once. Then call status(run_id, wait_seconds: 50, since: 0),
-and on each later call pass the cursor it returned as since. Do not poll faster.
+Runs are asynchronous: every start tool returns a run_id at once. Then call status the way its `next` says
+(run_id, wait_seconds, since: 0), and on each later call pass the cursor it returned as since. Do not poll faster.
 Cards: every start tool, resume and status reply carries "card", a small bordered box. Show it to the developer
-every time you get one, as-is in a code block: when you call a tentacle, on every status reply (also when there
-are no new feed lines), and when it finishes. While it runs, put the new feed lines under the card in the same code
-block, one per line, nothing added. Never redraw, shorten or reword a card; add at most one short line of your own.
+as-is in a code block when you call a tentacle, and when a run or chain ends, pauses or asks a question.
+While it runs, follow the status reply's `next`: when it says the developer sees live progress (a status line
+under the pending call that updates in place), write nothing at all between status calls; otherwise show the
+card with the new feed lines under it in the same code block, one per line, nothing added.
+Never redraw, shorten or reword a card; add at most one short line of your own.
 
 After every finished run or chain, follow its `next`:
 - "ask: …" show the result, suggest exactly that step, then stop and wait for the developer.

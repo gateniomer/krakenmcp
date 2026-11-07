@@ -5,7 +5,7 @@ import { notReported, clip } from './view.js';
 import { resolveTentacle, knownNames, userDir, userTentacles } from './tentacles.js';
 import { knownChains, resolveChain, checkChain, userChainDir, userChains } from './chains.js';
 import { agentInfo, checkAgents } from './agents.js';
-import { maxParallel } from './scheduler.js';
+import { maxParallel, pollSeconds } from './scheduler.js';
 import { repoRoot } from './git.js';
 import { parseJson as parse } from './util.js';
 
@@ -105,7 +105,7 @@ export function settingsReport(dir, { showPrompts = false, checkAll = false } = 
   return {
     repo: repoRoot(dir), tentacles, chains: knownChains().map((n) => chainInfo(n, dir)),
     agents: agents.agents, agent_problems: orNone(agents.problems),
-    limits: { max_parallel: maxParallel() },
+    limits: { max_parallel: maxParallel(), poll_seconds: pollSeconds() },
     user_files: { dir: userDir(), problems: orNone(userTentacles().problems) },
     chain_files: { dir: userChainDir(), problems: orNone(userChains().problems) },
   };

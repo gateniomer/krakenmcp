@@ -73,7 +73,8 @@ export function chainSummary(c) {
   const current = pause ? paused
     : status === 'waiting' ? 'question for the developer'
       : cur ? `${cur.tentacle} › ${currentActivity(rows, cur.status)}` : (c.stage ?? 'starting');
-  const identity = `chain ${c.name} › stage ${c.stage}`;
+  const marks = stages.map((st, i) => `${st.tentacle} ${stageMark(c, i, status, pause)}`).join(' → ');
+  const identity = `chain ${c.name} › ${marks}`;
   return {
     kind: 'chain',
     headline: headline(identity, status, elapsed, tools, current),

@@ -12,7 +12,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { newId, nowIso, getRun, insertChain, getChain, updateChain, resumedBy, IN_PROGRESS, latestReview,
   chainRuns } from './store.js';
-import { startNode } from './scheduler.js';
+import { startNode, firstStatus } from './scheduler.js';
 import { cancelRun, resumeRun } from './control.js';
 import { mergeRun } from './branches.js';
 import { resolveChain, checkChain } from './chains.js';
@@ -52,7 +52,7 @@ export function startChain({ name = 'default', task, cwd, session = 'default', v
     options: { verify, max_fix_rounds: max_fix_rounds ?? chain.max_fix_rounds, context_runs, overrides } });
   updateChain(id, { pid: startNode('chain-driver.js', id) });
   return { card: chainCard(getChain(id)), chain_id: id, name, status: 'running', stages: names,
-    next: `call status with run_id "${id}", wait_seconds 50 and since 0` };
+    next: firstStatus(id) };
 }
 
 export function cancelChain(id) {
@@ -90,7 +90,7 @@ export function resumeChain(id, input) {
   updateChain(id, { pid: startNode('chain-driver.js', id) });
   const continuesWith = pause.reason === 'verify_failed' ? 'fix' : pause.next_stage;
   return { card: chainCard(getChain(id)), chain_id: id, status: 'running', continues_with: continuesWith,
-    next: `call status with run_id "${id}", wait_seconds 50 and since 0` };
+    next: firstStatus(id) };
 }
 
 // ---- driver: chain-driver.js calls tick() every second until it returns false ----

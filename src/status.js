@@ -1,7 +1,9 @@
-// The status tool: wait while a run or chain is busy (sending progress notifications), then reply
-// with its card, summary and feed (compact while it runs, full once it ends).
+// The status tool: wait while a run or chain is busy, then reply with its card, summary and feed
+// (compact while it runs, full once it ends). While it waits, progress notifications carry a one-line
+// status that clients like Claude Code show under the pending call and update in place, so the head
+// does not need to print anything between polls.
 import { IN_PROGRESS, getRun, getChain } from './store.js';
-import { pump } from './scheduler.js';
+import { pump, pollSeconds } from './scheduler.js';
 import { isChainId } from './chain.js';
 import { describeChain, chainStatus, chainFeed, chainSummary, chainCard } from './chain-view.js';
 import { describe } from './view.js';
@@ -21,23 +23,32 @@ function subject(id) {
     describe: (r, full, live) => ({ ...describe(r, full), ...live }) };
 }
 
+const REFRESH_MS = 5000; // the live line's clock moves at least this often
+
 // Poll once a second until it is no longer busy or the wait is over. A progress notification goes
-// out when the headline changes (ignoring the clock) and about every 10 seconds otherwise.
+// out when the status line changes (ignoring the clock) and every REFRESH_MS otherwise.
 async function waitWhileBusy(s, item, seconds, progress) {
   const started = Date.now(), deadline = started + seconds * 1000;
-  let lastKey = null;
+  let lastKey = null, lastSent = 0;
   while (s.busy(item) && Date.now() < deadline) {
     await sleep(1000);
     item = s.load();
     if (!progress) continue;
     const live = s.summary(item);
-    const elapsed = Date.now() - started;
-    if (live.key !== lastKey || elapsed % 10_000 < 1000) {
-      lastKey = live.key;
-      progress(Math.round(elapsed / 1000), live.headline);
+    if (live.key !== lastKey || Date.now() - lastSent >= REFRESH_MS) {
+      lastKey = live.key; lastSent = Date.now();
+      progress(Math.round((lastSent - started) / 1000), live.headline);
     }
   }
   return item;
+}
+
+// While it runs: with progress notifications the developer already sees a live line, so the head
+// stays quiet; without them it shows the card on every poll.
+function busyNext(id, cursor, live) {
+  const again = `call status again with run_id "${id}", wait_seconds ${pollSeconds()} and since: ${cursor}`;
+  return live ? `the developer sees live progress under this call: write nothing, just ${again}`
+    : `show card as-is in a code block with the feed lines under it (even if there are none), then ${again}`;
 }
 
 export async function status({ run_id, wait_seconds = 0, full = false, since }, progress) {
@@ -55,6 +66,5 @@ export async function status({ run_id, wait_seconds = 0, full = false, since }, 
   // Compact while it runs: only what the head shows to the developer.
   return { card, id: item.id, status: summary.status, stage: summary.stage, elapsed_s: summary.elapsed_s,
     cost_usd: summary.cost_usd, summary, feed: live.feed, cursor: live.cursor,
-    next: 'show card as-is in a code block with the feed lines under it (even if there are none), ' +
-      `then call status again with since: ${live.cursor}` };
+    next: busyNext(item.id, live.cursor, !!progress) };
 }

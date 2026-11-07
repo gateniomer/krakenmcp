@@ -50,7 +50,7 @@ test('tentacles shows resolved settings with their sources, installed agents and
   assert.equal(think.sources.agent, 'user file');
   assert.equal(think.settings.effort, null, 'agent changed, so Claude-only effort was reset');
   assert.equal(t.agents.find((a) => a.name === 'opencode').installed, true);
-  assert.deepEqual(t.limits, { max_parallel: 3 });
+  assert.deepEqual(t.limits, { max_parallel: 3, poll_seconds: 25 });
   assert.equal(t.chains[0].name, 'default');
   assert.deepEqual(t.chains[0].stages.map((s) => [s.tentacle, s.kind, s.autonomy]),
     [['plan', 'read', 'ask'], ['execute', 'write', 'ask'], ['review', 'review', 'ask']]);
@@ -116,6 +116,17 @@ test('CLI: list with typed file values, limit, and helpful errors', () => {
 
   assert.match(cliFails('limit', '0'), /integer from 1 to 32/);
   assert.match(cliFails('frobnicate'), /usage: krakenmcp/);
+});
+
+test('krakenmcp poll sets how long each status call waits; start replies follow it', async () => {
+  assert.equal(json(h.cli('poll')).poll_seconds, 25);
+  assert.equal(json(h.cli('poll', '40')).poll_seconds, 40);
+  const r = await k.call('explain', { area: 'poll', cwd: h.repo });
+  assert.match(r.next, new RegExp(`^call status with run_id "${r.run_id}", wait_seconds 40 and since 0$`));
+  await k.wait(r.run_id);
+  assert.match(cliFails('poll', '4'), /from 5 to 55/);
+  assert.match(cliFails('poll', '56'), /from 5 to 55/);
+  h.cli('poll', '25');
 });
 
 test('krakenmcp edit creates a starter file, opens it in $VISUAL, and checks it', () => {

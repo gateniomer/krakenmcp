@@ -11,6 +11,8 @@
 // krakenmcp doctor                        check installed agent CLIs (exit 1 if a tentacle needs a missing
 // one)
 //   krakenmcp limit [n]                     show/set max parallel runs (default 3)
+//   krakenmcp poll [seconds]                show/set how long each status call waits while a run is busy
+//        (5-55, default 25): shorter shows progress more often, longer means fewer tool calls
 //   krakenmcp prune [--older-than 30] [--dry-run] [--worktrees]
 //        delete logs/result files and stored prompts of runs finished more than N days ago; list
 //        unmerged worktrees (--worktrees also discards the stale ones)
@@ -25,7 +27,7 @@ import { spawnSync } from 'node:child_process';
 import { knownNames, resolveTentacle, NAME, userDir, userTentacles, tentacleTemplate, BUILTIN }
   from './tentacles.js';
 import { PLANS_DIR, LOGS_DIR, ROOT, VERSION, INSTALL_SPEC, db, getRun, setSetting } from './store.js';
-import { maxParallel } from './scheduler.js';
+import { maxParallel, pollSeconds } from './scheduler.js';
 import { knownChains, resolveChain, checkChain, userChainDir, userChains, chainTemplate, parseChainFile,
   BUILTIN_CHAINS } from './chains.js';
 import { pruneData } from './prune.js';
@@ -149,6 +151,15 @@ function limit(n) {
   out({ max_parallel: maxParallel() });
 }
 
+function poll(n) {
+  if (n !== undefined) {
+    const v = Number(n);
+    if (!Number.isInteger(v) || v < 5 || v > 55) fail('poll takes whole seconds from 5 to 55');
+    setSetting('poll_seconds', v);
+  }
+  out({ poll_seconds: pollSeconds(), note: 'restart your MCP client so the head picks up a change' });
+}
+
 function prune() {
   const days = Number(opt('--older-than') ?? 30);
   if (!(days >= 0)) fail('--older-than takes a number of days');
@@ -233,6 +244,7 @@ const COMMANDS = {
   remove: () => removeFile('tentacle', name),
   chain: () => chainCommand(name, arg2),
   limit: () => limit(name),
+  poll: () => poll(name),
   prune,
   doctor,
   show: () => show(name),
@@ -243,7 +255,7 @@ try {
   const run = COMMANDS[cmd];
   if (run) run();
   else {
-    const commands = 'doctor|show|list|edit|remove|chain|limit|prune|update|version';
+    const commands = 'doctor|show|list|edit|remove|chain|limit|poll|prune|update|version';
     console.log(`usage: krakenmcp ${commands} [args] [--cwd <repo>]`);
     process.exit(cmd ? 1 : 0);
   }

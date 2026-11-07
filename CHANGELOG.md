@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [2.1.3] - 2026-11-07
+
+### Added
+- `krakenmcp poll [seconds]` sets how long each status call waits while a run is busy (5–55, default 25,
+  was a fixed 50). Start replies and the `tentacles` limits show it.
+
+### Changed
+- Less noise in the chat: while a run is busy, clients that show progress notifications (Claude Code)
+  get a live status line under the pending call, and the head writes nothing between polls. It shows
+  the card when it calls a tentacle and when the run ends, pauses or asks a question. Clients without
+  progress notifications still get the card on every poll.
+- The live line refreshes at least every 5 seconds (was 10), shows the model without its provider
+  prefix, and for a chain shows every stage with its mark.
+
 ## [2.1.2] - 2026-11-07
 
 ### Fixed

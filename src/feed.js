@@ -23,6 +23,9 @@ export function modelOf(run) {
   return run.model ?? AGENTS[run.agent]?.defaultModel?.[run.access] ?? 'default';
 }
 
+// The model without its provider prefix (opencode-go/deepseek-v4.1-flash -> deepseek-v4.1-flash).
+export const shortModel = (run) => String(modelOf(run)).split('/').at(-1);
+
 // "plan tentacle (claude opus)"; the model falls back to the agent's default for that access.
 export function runLabel(run, stage) {
   return `${stage ? `${stage} › ` : ''}${run.tentacle} tentacle (${run.agent} ${modelOf(run)})`;
@@ -131,7 +134,7 @@ export function runSummary(run, stage) {
   const tools = toolCounts(toolMessages(run.id));
   const m = metrics(run);
   const current = currentActivity(rows, run.status);
-  const identity = `${run.tentacle} › ${run.agent} ${modelOf(run)}`;
+  const identity = `${run.tentacle} › ${run.agent} ${shortModel(run)}`;
   return {
     kind: 'run',
     headline: headline(identity, run.status, m.duration_ms, tools, current),
@@ -156,7 +159,7 @@ export function runSummary(run, stage) {
 // ---- cards: the bordered boxes the head shows as-is (see card.js) ----
 
 export const statusText = (status) => `${STATUS_GLYPH[status] ?? '●'} ${status}`;
-export const runTitle = (run) => `🦑 ${run.tentacle} › ${run.agent} ${String(modelOf(run)).split('/').at(-1)}`;
+export const runTitle = (run) => `🦑 ${run.tentacle} › ${run.agent} ${shortModel(run)}`;
 const money = (usd) => (usd ? `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}` : null);
 const toolText = (tools) => (tools?.total ? `${tools.total} tool${tools.total === 1 ? '' : 's'}` : null);
 export const timeLine = (ms, usd, tools, extra = []) =>

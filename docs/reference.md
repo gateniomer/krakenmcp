@@ -79,7 +79,9 @@ a stage's question (answer the stage run) or is paused, with `pause: { reason, a
 `approval` after a stage whose autonomy is `ask`, or `verify_failed` when verify failed with no fix
 rounds left. `resume(chain_id, reply)` continues a paused chain.
 
-While `status` waits it sends MCP progress notifications if the client passes a progress token.
+While `status` waits it sends MCP progress notifications if the client passes a progress token: when the
+status line changes, and at least every 5 seconds so its clock moves. Each start tool's `next` says how long
+to wait (`krakenmcp poll`, default 25 seconds).
 
 Every finished run and chain returns a `next`, the one step after it:
 
@@ -94,9 +96,15 @@ points to the chain's status instead.
 ### Cards
 
 Every start tool (`think`, `plan`, `execute`, `review`, `explain`, `run`, `chain`), `resume` and every
-`status` reply carries `card`: a bordered box the head shows the developer as-is, in a code block, at
-three moments: when it calls a tentacle, on every poll (also when no new feed lines came in), and when the
-run ends. Kraken draws it, so it looks the same whichever model is the head.
+`status` reply carries `card`: a bordered box the head shows the developer as-is, in a code block, when it
+calls a tentacle and when the run ends, pauses or asks a question. Kraken draws it, so it looks the same
+whichever model is the head.
+
+While a run is busy, a client that passes a progress token (Claude Code does) shows Kraken's one-line
+status under the pending `status` call and updates it in place (`[ 🦑 explain › opencode deepseek-v4.1-flash ]
+● running  1m 12s  9 tools   using grep`; for a chain, a mark per stage). The reply's `next` then tells the
+head to write nothing between polls, so the chat stays short. Without a progress token, `next` asks it to
+show the card on every poll instead.
 
 ```
 ╭─ 🦑 plan › claude opus ───────────────────────────── ✓ done ─╮
@@ -223,6 +231,7 @@ krakenmcp chain list           # resolved chains: stages, their kind and autonom
 krakenmcp chain edit <name>    # open ~/.kraken/chains/<name>.md (created if missing), then check it
 krakenmcp chain remove <name>  # delete that file: your chain is gone, a built-in is back to its defaults
 krakenmcp limit [n]            # show / set how many runs may work at once (default 3)
+krakenmcp poll [seconds]       # show / set how long each status call waits while a run is busy (5-55, default 25)
 krakenmcp prune [--older-than 30] [--dry-run] [--worktrees]
 krakenmcp update               # reinstall a global git install; prints the old -> new version
 krakenmcp --version            # print the installed version

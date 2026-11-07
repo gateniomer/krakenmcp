@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { resolveAgent, AGENTS } from './agents.js';
 import { WORKTREES_DIR, newId, insertRun, getRun } from './store.js';
-import { pump, queueInfo } from './scheduler.js';
+import { pump, queueInfo, firstStatus } from './scheduler.js';
 import { reviewInput } from './branches.js';
 import { gitIn, isGitRepo } from './git.js';
 import { resolveTentacle, renderPrompt, formatContext } from './tentacles.js';
@@ -88,7 +88,7 @@ export function startRun(name, { input, plan_id, context_runs = [], target_run, 
     run_id: id, tentacle: name, status: getRun(id).status, queue: queueInfo(id),
     agent: s.agent, model: s.model, effort: s.effort ?? undefined,
     workdir, branch: branch ?? undefined, verify: s.access === 'write' ? s.verify ?? undefined : undefined,
-    next: `call status with run_id "${id}", wait_seconds 50 and since 0`,
+    next: firstStatus(id),
     limits: limits.max_cost_usd || limits.max_tokens ? limits : undefined,
     warnings: warnings.length ? warnings : undefined,
     note: branch ? 'Uncommitted changes in the main checkout are NOT in the worktree.' : undefined,

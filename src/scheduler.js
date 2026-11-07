@@ -13,6 +13,17 @@ export function maxParallel() {
   return Number.isInteger(v) && v > 0 ? v : DEFAULT_MAX_PARALLEL;
 }
 
+// ---- how long each status call waits while a run is busy (krakenmcp poll) ----
+
+export const DEFAULT_POLL_SECONDS = 25;
+export function pollSeconds() {
+  const v = Number(getSetting('poll_seconds') ?? DEFAULT_POLL_SECONDS);
+  return Number.isInteger(v) && v >= 5 && v <= 55 ? v : DEFAULT_POLL_SECONDS;
+}
+// The `next` of every start tool: the first status call.
+export const firstStatus = (id) =>
+  `call status with run_id "${id}", wait_seconds ${pollSeconds()} and since 0`;
+
 // Runs whose worker died (crash, reboot, kill -9) would otherwise show 'running' forever.
 export function reapStale() {
   const reaped = [];

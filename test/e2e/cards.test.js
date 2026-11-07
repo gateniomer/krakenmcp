@@ -24,6 +24,7 @@ test('a run has a card when it is called, on every poll, and when it ends', asyn
   assert.match(start.card, /🦑 explain › opencode .*○ queued|● running/);
   assert.match(start.card, new RegExp(`run +${start.run_id}`));
   assert.match(start.card, /task +the math module/);
+  assert.match(start.next, /wait_seconds 25 and since 0/);
 
   const live = await c.call('status', { run_id: start.run_id, wait_seconds: 1, since: 0 });
   assert.equal(live.status, 'running');
@@ -31,6 +32,13 @@ test('a run has a card when it is called, on every poll, and when it ends', asyn
   assert.match(live.card, /● running/);
   assert.match(live.card, /now +/);
   assert.match(live.next, /^show card as-is .*even if there are none/);
+  assert.match(live.next, /wait_seconds 25 and since: \d+$/);
+
+  // A client that asks for progress shows the live line itself: the head stays quiet.
+  const { result, notes } = await c.callProgress('status', { run_id: start.run_id, wait_seconds: 1,
+    since: live.cursor });
+  if (result.status === 'running') assert.match(result.next, /^the developer sees live progress .*write nothing/);
+  assert.ok(notes.every((n) => n.message.startsWith('[ 🦑 explain › opencode ')), JSON.stringify(notes));
 
   const done = await c.wait(start.run_id);
   assertBox(done.card);

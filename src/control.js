@@ -5,7 +5,7 @@ import { resolveAgent } from './agents.js';
 import { renderResumePrompt } from './tentacles.js';
 import { IN_PROGRESS, newId, insertRun, getRun, updateRun, addMessage, nowIso } from './store.js';
 import { alive, killTree } from './platform.js';
-import { pump, queueInfo } from './scheduler.js';
+import { pump, queueInfo, firstStatus } from './scheduler.js';
 import { ensureWorktree, tryGit } from './git.js';
 import { parseJson, fail } from './util.js';
 import { startCard } from './feed.js';
@@ -92,7 +92,7 @@ export function resumeRun(id, input, { session, answering = false, syncBase, mer
     run_id: newRunId, resumes: id, queue: queueInfo(newRunId), tentacle: prev.tentacle, status: 'queued',
     agent: prev.agent, model: prev.model,
     workdir: prev.workdir, branch: prev.branch ?? undefined,
-    next: `call status with run_id "${newRunId}", wait_seconds 50 and since 0`,
+    next: firstStatus(newRunId),
   };
 }
 
