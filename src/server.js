@@ -13,19 +13,19 @@ import { cancelRun, resumeRun } from './control.js';
 import { mergeRun, discardRun, syncBranch } from './branches.js';
 import { pump, maxParallel } from './scheduler.js';
 import { startChain, cancelChain, resumeChain, describeChain, isChainId, chainStatus, chainFeed,
-  chainSummary } from './chain.js';
+  chainSummary, chainCard } from './chain.js';
 import { knownChains, resolveChain, checkChain, userChainDir, userChains } from './chains.js';
 import { resolveTentacle, knownNames, userDir, userTentacles } from './tentacles.js';
-import { startRun, describe, sessionSummary, clip, agentReport, runFeed, runSummary } from './runs.js';
+import { startRun, describe, sessionSummary, clip, agentReport, runFeed, runSummary, runCard } from './runs.js';
 
 const INSTRUCTIONS = `Kraken delegates work to other headless coding agents. Each action is a "tentacle"; you are the head
 (the agent the developer talks to) that sends work to them.
 Runs are asynchronous: every start tool returns a run_id at once. Then call status(run_id, wait_seconds: 50, since: 0),
-and on each later call pass the cursor it returned as since. While a run or chain is in progress, status returns a
-summary plus new feed lines. Show the developer: (1) summary.headline as-is; (2) one or two short lines written for a
-human, "So far: …" from stage/milestones/tools and "Now: …" from last_line or question, never inventing progress that
-is not in summary; (3) the feed lines as they are in a code block, one per line, nothing added. Then call status again.
-Do not poll faster.
+and on each later call pass the cursor it returned as since. Do not poll faster.
+Cards: every start tool, resume and status reply carries "card", a small bordered box. Show it to the developer
+every time you get one, as-is in a code block: when you call a tentacle, on every status reply (also when there
+are no new feed lines), and when it finishes. While it runs, put the new feed lines under the card in the same code
+block, one per line, nothing added. Never redraw, shorten or reword a card; add at most one short line of your own.
 
 After every finished run or chain, follow its \`next\`:
 - "ask: …" show the result, suggest exactly that step, then stop and wait for the developer.
@@ -164,18 +164,19 @@ server.tool('status', {
     }
   }
   const sum = pipe ? chainSummary(item) : runSummary(item);
+  const card = pipe ? chainCard(item) : runCard(item);
   if (since === undefined) {
-    return text(pipe ? { ...describeChain(item, full), summary: sum }
-      : { ...describe(item, full), summary: sum });
+    return text(pipe ? { card, ...describeChain(item, full), summary: sum }
+      : { card, ...describe(item, full), summary: sum });
   }
   const live = pipe ? chainFeed(item, since, !busy(item)) : runFeed(item, since, !busy(item));
   if (busy(item)) { // compact reply: only what the head shows to the developer
-    return text({ id: item.id, status: sum.status, stage: sum.stage, elapsed_s: sum.elapsed_s, cost_usd: sum.cost_usd,
+    return text({ card, id: item.id, status: sum.status, stage: sum.stage, elapsed_s: sum.elapsed_s, cost_usd: sum.cost_usd,
       summary: sum, feed: live.feed, cursor: live.cursor,
-      next: `show summary.headline as-is, then one or two short lines for the developer ("So far: …" from stage/milestones/tools and "Now: …" from last_line or question), then the feed lines as they are; call status again with since: ${live.cursor}` });
+      next: `show card as-is in a code block with the feed lines under it (even if there are none), then call status again with since: ${live.cursor}` });
   }
-  return text(pipe ? { ...describeChain(item, full, live), summary: sum }
-    : { ...describe(item, full), ...live, summary: sum });
+  return text(pipe ? { card, ...describeChain(item, full, live), summary: sum }
+    : { card, ...describe(item, full), ...live, summary: sum });
 });
 
 // The live summary of a run or chain, for progress notifications (key = headline without time).

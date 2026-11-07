@@ -1,6 +1,6 @@
 {
   "name": "krakenmcp",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "MCP server that lets your coding agent delegate think / plan / execute / review work to other headless coding agents (Claude Code, Codex, Cursor, OpenCode, Aider).",
   "keywords": [
     "mcp",

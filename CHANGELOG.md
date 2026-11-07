@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-11-07
+
+### Added
+- Cards: every start tool, `resume` and every `status` reply returns `card`, a bordered box drawn by
+  Kraken (tentacle, agent and model; then progress; then the result and the next step; for a chain, a
+  mark per stage). The server instructions tell the head to show it as-is when it calls a tentacle, on
+  every poll (also when there are no new feed lines) and when the run ends.
+
+### Changed
+- The head no longer writes its own "So far / Now" lines; the card carries that state. `summary` and its
+  `headline` stay (the headline is used for progress notifications).
+
 ## [2.0.0] - 2026-11-07
 
 ### Breaking

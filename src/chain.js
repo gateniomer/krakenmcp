@@ -19,7 +19,8 @@ import { cancelRun, resumeRun } from './control.js';
 import { mergeRun } from './branches.js';
 import { resolveChain, checkChain } from './chains.js';
 import { startRun, describe, runLabel, renderFeed, STOP_NEXT, headline, toolCounts, finishedNext, runFacts,
-  currentActivity, lastAgentText, modelOf } from './runs.js';
+  currentActivity, lastAgentText, modelOf, statusText, timeLine } from './runs.js';
+import { box } from './card.js';
 
 export const isChainId = (id) => typeof id === 'string' && id.startsWith('chain_');
 const FINAL = ['done', 'failed', 'cancelled'];
@@ -50,7 +51,7 @@ export function startChain({ name = 'default', task, cwd, session = 'default', v
   insertChain({ id, session, name, task, cwd: dir, stages: checked.stages, stage: names[0],
     options: { verify, max_fix_rounds: max_fix_rounds ?? chain.max_fix_rounds, context_runs, overrides } });
   updateChain(id, { pid: startNode('chain-driver.js', id) });
-  return { chain_id: id, name, status: 'running', stages: names,
+  return { card: chainCard(getChain(id)), chain_id: id, name, status: 'running', stages: names,
     next: `call status with run_id "${id}", wait_seconds 50 and since 0` };
 }
 
@@ -86,7 +87,7 @@ export function resumeChain(id, input) {
     updateChain(id, { status: 'running', pause: null, note: input ?? null });
   }
   updateChain(id, { pid: startNode('chain-driver.js', id) });
-  return { chain_id: id, status: 'running', continues_with: pause.reason === 'verify_failed' ? 'fix' : pause.next_stage,
+  return { card: chainCard(getChain(id)), chain_id: id, status: 'running', continues_with: pause.reason === 'verify_failed' ? 'fix' : pause.next_stage,
     next: `call status with run_id "${id}", wait_seconds 50 and since 0` };
 }
 
@@ -218,6 +219,47 @@ export function describeChain(c, full = false, live) {
     cursor: live?.cursor ?? lastChainMessageId(c.id),
     next: chainNext(c, status, cur, pause, stages),
   };
+}
+
+// The card for a chain: every stage with a mark (✓ done, ● now, ◐ paused, ✕ failed, · not yet),
+// what is happening now, and when it ends its result and the next step.
+export function chainCard(c) {
+  const status = chainStatus(c);
+  const stages = json(c.stages, []);
+  const pause = json(c.pause, null);
+  const finished = FINAL.includes(c.status);
+  const markOf = (i) => {
+    if (i < c.stage_index) return '✓';
+    if (i > c.stage_index) return '·';
+    if (pause?.reason === 'approval') return '·';
+    if (pause) return '◐';
+    return { done: '✓', failed: '✕', cancelled: '⊘' }[c.status] ?? (status === 'waiting' ? '◐' : '●');
+  };
+  const cur = c.current_run ? getRun(c.current_run) : null;
+  const rows = cur ? recentMessages(cur.id, 50) : [];
+  const opts = json(c.options, {});
+  const dateOf = (x) => new Date(x.includes('T') ? x : `${x.replace(' ', 'T')}Z`);
+  const elapsed = c.created_at ? (c.finished_at ? dateOf(c.finished_at) : new Date()) - dateOf(c.created_at) : undefined;
+  const cost = chainRuns(c.id).reduce((a, r) => a + (r.cost_usd ?? 0), 0);
+  const tools = toolCounts(chainToolMessages(c.id));
+  const result = json(c.result, null);
+  const write = c.write_run ? getRun(c.write_run) : null;
+  const next = finished || status === 'waiting' ? chainNext(c, status, cur, pause, stages) : null;
+  const shown = pause ? (pause.reason === 'approval' ? '◐ paused' : '◐ paused: verify failed') : statusText(status);
+  return box(`🦑 chain ${c.name} › ${c.stage === 'finished' ? stages.at(-1)?.tentacle ?? '' : c.stage}`, shown, [
+    ['chain', c.id],
+    ['stages', stages.map((st, i) => `${st.tentacle} ${markOf(i)}`).join(' → '), 2],
+    ['time', timeLine(elapsed, cost, tools, opts.max_fix_rounds ? [`fix ${c.fix_rounds}/${opts.max_fix_rounds}`] : [])],
+    ['now', !finished && !pause && cur ? (status === 'waiting' ? 'question for the developer'
+      : `${cur.tentacle} › ${currentActivity(rows, cur.status)}`) : null],
+    ['question', status === 'waiting' && !pause ? cur?.question : null, 3],
+    ['paused', pause?.reason === 'approval' ? `after ${pause.after}; resume to continue to ${pause.next_stage}`
+      : pause ? `${pause.after} failed verify; resume with a fix instruction, or cancel` : null, 2],
+    ['result', result?.note, 2],
+    ['branch', write?.branch && !write.outcome ? write.branch : null],
+    ['error', c.error, 2],
+    ['next', next, 3],
+  ]);
 }
 
 function describeBrief(run, full) {

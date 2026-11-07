@@ -91,18 +91,40 @@ Every finished run and chain returns a `next`, the one step after it:
 Questions, failures and `verify_failed` never depend on autonomy. A run that belongs to a chain
 points to the chain's status instead.
 
+### Cards
+
+Every start tool (`think`, `plan`, `execute`, `review`, `explain`, `run`, `chain`), `resume` and every
+`status` reply carries `card`: a bordered box the head shows the developer as-is, in a code block, at
+three moments: when it calls a tentacle, on every poll (also when no new feed lines came in), and when the
+run ends. Kraken draws it, so it looks the same whichever model is the head.
+
+```
+╭─ 🦑 plan › claude opus ───────────────────────────── ✓ done ─╮
+│ run     plan_mw6e5hjp7926                                    │
+│ took    2m 36s · $0.78 · 5 tools                             │
+│ result  ~/.kraken/plans/plan_mw6e5hjp7926.md                 │
+│ next    ask: summarize the plan (result_file); suggest       │
+│         execute("plan_mw6e5hjp7926")                         │
+╰──────────────────────────────────────────────────────────────╯
+```
+
+A start card shows the run, the task and (for write runs) the branch and verify command. While the run is
+in progress the card shows the time, cost, tool count and what the agent is doing now. A finished card
+shows the result: error, verdict, branch and diff, verify exit, result file, and `next`. A chain card
+marks every stage (`plan ✓ → execute ● → review ·`; `◐` paused, `✕` failed, `⊘` cancelled) and says
+why it paused. Cards are 64 columns wide; long values are cut with `…`.
+
 ### Live feed
 
 `status` takes `since`, a cursor (a message id; start with `0`). It returns:
 
-- `summary`: the live state, so the head can show where the tentacle is at above the feed. It is returned in
-  every reply, in progress or finished. `headline` is a ready-made one-liner
+- `summary`: the facts behind the card, returned in every reply, in progress or finished. `headline` is a
+  one-liner (used for MCP progress notifications)
   (`[ 🦑 plan › claude opus ]  ● running  42s    6 tools   using read`); `kind` is `run` or `chain`;
   `tools` is a count and per-name breakdown; `last_line` is the agent's own latest text; `question` is set
   while waiting; plus `status`, `elapsed_s`, `cost_usd` and `stage` (chains only). `milestones` has
   `plan_id` / `verify` / `resumed_from` for a run and `stages` (`"2 of 3"`) / `verify` / `fix_rounds`
-  for a chain (`verify` is `{ cmd, exit }` in both). The head writes one or two
-  human lines from it (`So far: …`, `Now: …`) and shows `headline` as it is.
+  for a chain (`verify` is `{ cmd, exit }` in both).
 - `feed`: ready-made lines for the progress made after `since`, which the head shows to the developer as
   they are, e.g. `plan tentacle (claude opus): "Reading src/server.js…"`. Tool calls are folded into one
   line (`  · tools: Read ×3, Grep`). Text is cut at 200 characters. At most 12 lines per reply; older ones
@@ -111,7 +133,7 @@ points to the chain's status instead.
 - `cursor`: pass it as `since` on the next call so no line repeats or is lost. `describe` output also
   carries `cursor`.
 
-While the run or chain is in progress and `since` is given, the reply is compact: `id`, `status`,
+While the run or chain is in progress and `since` is given, the reply is compact: `card`, `id`, `status`,
 `stage` (chains), `elapsed_s`, `cost_usd`, `summary`, `feed`, `cursor`, `next`. Once it ends (or is `waiting` on a
 question) the reply is the full one plus the last `feed` and `cursor`. Every reply carries `summary`; without `since`
 the reply is otherwise unchanged apart from `cursor`; run and chain replies both carry one, so following can start

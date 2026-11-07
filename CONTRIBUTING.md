@@ -27,6 +27,7 @@ Requires Node 22.13+ (for `node:sqlite`), git, and macOS or Linux.
 | `src/scheduler.js` | Parallel-run limit, starting workers, recovering dead runs |
 | `src/prune.js` | `krakenmcp prune` |
 | `src/worker.js` | Background process that runs one agent, enforces budgets and records the result |
+| `src/card.js` | The bordered cards the head shows (display width, cutting, wrapping) |
 | `src/chains.js`, `src/chains/*.md` | Chain files: parsing, layering and checks; the built-in chains |
 | `src/chain.js`, `src/chain-driver.js` | Chain state machine and the detached process that drives it |
 | `src/platform.js` | Everything OS-specific: finding and starting executables, killing process trees, shells |

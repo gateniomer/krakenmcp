@@ -7,6 +7,7 @@ import { IN_PROGRESS, newId, insertRun, getRun, updateRun, addMessage, nowIso } 
 import { alive, killTree } from './platform.js';
 import { pump, queueInfo } from './scheduler.js';
 import { ensureWorktree, tryGit } from './branches.js';
+import { startCard } from './runs.js';
 
 export function mustRun(id) {
   const run = getRun(id);
@@ -72,6 +73,7 @@ export function resumeRun(id, input, { session, answering = false, syncBase, mer
   }
   pump();
   return {
+    card: startCard(getRun(newRunId)),
     run_id: newRunId, resumes: id, queue: queueInfo(newRunId), tentacle: prev.tentacle, status: 'queued', agent: prev.agent, model: prev.model,
     workdir: prev.workdir, branch: prev.branch ?? undefined,
     next: `call status with run_id "${newRunId}", wait_seconds 50 and since 0`,

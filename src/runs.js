@@ -10,6 +10,7 @@ import {
 import { pump, queueInfo } from './scheduler.js';
 import { reviewInput, gitIn } from './branches.js';
 import { resolveTentacle, renderPrompt, formatContext, knownNames, stageKind } from './tentacles.js';
+import { box, tildify } from './card.js';
 
 export function isGitRepo(dir) {
   try { execFileSync('git', ['-C', dir, 'rev-parse', '--is-inside-work-tree'], { stdio: 'ignore' }); return true; }
@@ -186,8 +187,8 @@ export function runFeed(run, since = 0, all = false) {
   return { feed: renderFeed(rows, () => label, run.id), cursor: rows.length ? rows.at(-1).id : Math.max(since, lastMessageId(run.id)) };
 }
 
-// ---- live summary: the headline the head shows above the feed, plus the state it writes
-// "So far / Now" from. Rendering the sentence is the head's job (it knows the task); Kraken
+// ---- live summary: the facts behind the cards and the one-line headline progress notifications
+// use. Kraken
 // only supplies facts, so the summary is deterministic and costs no extra model call. ----
 
 const STATUS_GLYPH = {
@@ -269,6 +270,55 @@ export function runSummary(run, stage) {
   };
 }
 
+// ---- cards: the bordered boxes the head shows as-is (see card.js) ----
+
+export const statusText = (status) => `${STATUS_GLYPH[status] ?? '●'} ${status}`;
+export const runTitle = (run) => `🦑 ${run.tentacle} › ${run.agent} ${String(modelOf(run)).split('/').at(-1)}`;
+const money = (usd) => (usd ? `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}` : null);
+export const timeLine = (ms, usd, tools, extra = []) => [elapsedText(ms), money(usd),
+  tools?.total ? `${tools.total} tool${tools.total === 1 ? '' : 's'}` : null, ...extra].filter(Boolean).join(' · ');
+const firstLine = (s) => (s ?? '').split('\n').find((l) => l.trim()) ?? '';
+
+// The card for a run that was just started or resumed: what the head called, on which agent.
+export function startCard(run) {
+  const q = queueInfo(run.id);
+  return box(runTitle(run), q ? `○ queued (${q.ahead} ahead)` : statusText(run.status), [
+    ['run', run.resumed_from ? `${run.id} (resumes ${run.resumed_from})` : run.id],
+    ['task', firstLine(run.task)],
+    ['target', run.target_run],
+    ['branch', run.branch],
+    ['verify', run.verify_cmd],
+  ]);
+}
+
+// The card for a run in progress (what it is doing now) or finished (its result and the next step).
+export function runCard(run) {
+  const m = metrics(run);
+  const tools = toolCounts(toolMessages(run.id));
+  const time = timeLine(m.duration_ms, m.cost_usd, tools);
+  if (IN_PROGRESS.includes(run.status)) {
+    const rows = recentMessages(run.id, 50);
+    const now = currentActivity(rows, run.status), said = lastAgentText(rows);
+    return box(runTitle(run), statusText(run.status), [
+      ['run', run.id], ['time', time], ['now', now], ['said', said && !said.startsWith(now.replace(/…$/, '')) ? said : null, 2],
+    ]);
+  }
+  const file = join(PLANS_DIR, `${run.id}.md`);
+  const diff = m.diff ? `${m.diff.files} file${m.diff.files === 1 ? '' : 's'}, +${m.diff.insertions} −${m.diff.deletions}` : null;
+  return box(runTitle(run), statusText(run.status), [
+    ['run', run.id],
+    ['took', time],
+    ['question', run.status === 'waiting' ? run.question : null, 3],
+    ['error', run.error ? firstLine(run.error) : run.stop_reason, 2],
+    ['verdict', run.verdict],
+    ['branch', run.branch ? `${run.branch}${diff ? ` (${diff})` : ''}` : null],
+    ['verify', run.verify_cmd ? `${run.verify_cmd} → exit ${run.verify_exit ?? '?'}` : null],
+    ['outcome', run.outcome ? `${run.outcome}: ${run.outcome_detail}` : null],
+    ['result', existsSync(file) ? tildify(file) : null, 2],
+    ['next', nextOf(run).next, 3],
+  ]);
+}
+
 // Create and start a run of any tentacle.
 // Chain stages pass chain_id / chain_stage, their stage settings as layers, and the developer's note.
 export function startRun(name, { input, plan_id, context_runs = [], target_run, cwd, session, overrides, chain_id,
@@ -336,6 +386,7 @@ export function startRun(name, { input, plan_id, context_runs = [], target_run, 
   });
   pump();
   return {
+    card: startCard(getRun(id)),
     run_id: id, tentacle: name, status: getRun(id).status, queue: queueInfo(id), agent: s.agent, model: s.model, effort: s.effort ?? undefined,
     workdir, branch: branch ?? undefined, verify: s.access === 'write' ? s.verify ?? undefined : undefined,
     next: `call status with run_id "${id}", wait_seconds 50 and since 0`,

@@ -119,7 +119,17 @@ head:  → merge(run)
 head:  Merged into main.
 ```
 
-`→` is a tool call the head makes, `←` is what comes back. The head stops after each step because
+`→` is a tool call the head makes, `←` is what comes back. Each call, each progress update and each
+result also shows up as a small card:
+
+```
+╭─ 🦑 execute › opencode deepseek-v4.1-flash ────── ● running ─╮
+│ run   execute_7f3a                                           │
+│ time  1m 12s · $0.04 · 9 tools                               │
+│ now   using edit                                             │
+╰──────────────────────────────────────────────────────────────╯
+```
+ The head stops after each step because
 every tentacle's autonomy is `ask` by default. Set `autonomy: auto` on a tentacle to let the head take
 the next step by itself, or tell the head "work in auto this session".
 
