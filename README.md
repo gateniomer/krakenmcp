@@ -72,7 +72,7 @@ Supported agents: [Claude Code](https://code.claude.com/docs), [OpenCode](https:
 You need Node.js 22.13+, git, and at least one supported agent CLI, installed and logged in.
 
 ```sh
-npm install -g github:gateniomer/kraken
+npm install -g github:gateniomer/krakenmcp
 krakenmcp doctor            # optional: check which agents Kraken finds
 ```
 

@@ -11,6 +11,9 @@ import { pageAll } from './util.js';
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const VERSION = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
+// What `krakenmcp update` installs. npm git specs take the branch after '#'; an '@' is read as
+// a version and npm resolves github.com/null/... instead.
+export const INSTALL_SPEC = 'github:gateniomer/krakenmcp#main';
 // Per-user data (database, plans, logs, worktrees). Override with KRAKEN_DATA.
 export const DATA_DIR = process.env.KRAKEN_DATA || join(homedir(), '.kraken');
 export const PLANS_DIR = join(DATA_DIR, 'plans');   // results of read tentacles, as Markdown

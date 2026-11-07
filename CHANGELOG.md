@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [2.1.2] - 2026-11-07
+
+### Fixed
+- `krakenmcp update` failed with `Permission denied (publickey)` for `github.com/null/main.git`: it
+  passed `github:…@main`, which npm reads as a version. It now installs `github:gateniomer/krakenmcp#main`.
+  Installs from 2.1.1 and older must run `npm install -g github:gateniomer/krakenmcp` once by hand.
+- The repository links and install command use the repository's current name, `krakenmcp`.
+
 ## [2.1.1] - 2026-11-07
 
 ### Changed

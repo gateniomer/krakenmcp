@@ -24,7 +24,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, lstatSync, 
 import { spawnSync } from 'node:child_process';
 import { knownNames, resolveTentacle, NAME, userDir, userTentacles, tentacleTemplate, BUILTIN }
   from './tentacles.js';
-import { PLANS_DIR, LOGS_DIR, ROOT, VERSION, db, getRun, setSetting } from './store.js';
+import { PLANS_DIR, LOGS_DIR, ROOT, VERSION, INSTALL_SPEC, db, getRun, setSetting } from './store.js';
 import { maxParallel } from './scheduler.js';
 import { knownChains, resolveChain, checkChain, userChainDir, userChains, chainTemplate, parseChainFile,
   BUILTIN_CHAINS } from './chains.js';
@@ -216,7 +216,7 @@ function updateKraken() {
         'update it however you installed it');
   }
   // npm's output goes to stderr so stdout stays the JSON other commands print.
-  const r = spawnSync('npm', ['install', '-g', 'github:gateniomer/kraken@main'],
+  const r = spawnSync('npm', ['install', '-g', INSTALL_SPEC],
     { stdio: ['inherit', process.stderr, 'inherit'] });
   if (r.error) fail(`could not run npm: ${r.error.message}`);
   if (r.status) fail(`npm install exited with status ${r.status}`);

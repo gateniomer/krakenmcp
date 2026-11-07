@@ -13,7 +13,7 @@ connecting each client, tools, tentacle fields, the CLI, agent adapters and wher
 
 ## Connect a client
 
-The server command is `krakenmcp` (after `npm install -g github:gateniomer/kraken`) or
+The server command is `krakenmcp` (after `npm install -g github:gateniomer/krakenmcp`) or
 `node /path/to/kraken/src/bin.js` (from a source checkout). The examples use `krakenmcp`.
 
 **Claude Code**
