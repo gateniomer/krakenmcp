@@ -50,10 +50,39 @@ test('tentacles shows resolved settings with their sources, installed agents and
   assert.equal(think.sources.agent, 'user file');
   assert.equal(think.settings.effort, null, 'agent changed, so Claude-only effort was reset');
   assert.equal(t.agents.find((a) => a.name === 'opencode').installed, true);
-  assert.deepEqual(t.limits, { max_parallel: 3, approval_mode: 'ask' });
+  assert.deepEqual(t.limits, { max_parallel: 3 });
+  assert.equal(t.chains[0].name, 'default');
+  assert.deepEqual(t.chains[0].stages.map((s) => [s.tentacle, s.kind, s.autonomy]),
+    [['plan', 'read', 'ask'], ['execute', 'write', 'ask'], ['review', 'review', 'ask']]);
+  assert.equal(t.tentacles.find((x) => x.name === 'think').settings.autonomy, 'ask');
+  assert.equal(t.tentacles.find((x) => x.name === 'think').sources.autonomy, 'built-in');
   assert.ok(t.tentacles.every((x) => x.settings.prompt.length <= 160), 'prompts are clipped unless asked for');
   const full = await k.call('tentacles', { cwd: h.repo, show_prompts: true });
   assert.match(full.tentacles[0].settings.prompt, /Open questions/);
+});
+
+test('krakenmcp mode is gone; chain list|edit|remove manage chain files', () => {
+  assert.match(cliFails('mode', 'auto'), /usage: krakenmcp .*chain/);
+  const listed = json(h.cli('chain', 'list'));
+  assert.equal(listed.chains[0].name, 'default');
+  assert.equal(listed.chains[0].stages[0].autonomy, 'ask (built-in)');
+  const env = { ...h.env, VISUAL: 'true' };
+  const cli = (...a) => execFileSync(process.execPath, [new URL('../../src/bin.js', import.meta.url).pathname, ...a],
+    { encoding: 'utf8', env, cwd: h.repo, stdio: ['ignore', 'pipe', 'pipe'] });
+  const created = json(cli('chain', 'edit', 'stepwise'));
+  assert.equal(created.created, true);
+  assert.deepEqual(created.chain.stages.map((s) => s.tentacle), ['plan', 'execute', 'review']);
+  writeFileSync(created.file, '---\nstages: [{"tentacle": "review"}, {"tentacle": "execute"}]\n---\n');
+  let err;
+  try { cli('chain', 'edit', 'stepwise'); } catch (e) { err = e; }
+  assert.equal(err?.status, 1);
+  assert.match(err.stdout, /must come after the write stage/);
+  writeFileSync(created.file, '---\nstages: nope\n---\n');
+  try { cli('chain', 'edit', 'stepwise'); err = null; } catch (e) { err = e; }
+  assert.match(err?.stdout ?? '', /stages must be a JSON array/);
+  assert.match(json(cli('chain', 'remove', 'stepwise')).note, /stepwise is gone/);
+  assert.throws(() => cli('chain', 'remove', 'default'), /already the built-in/);
+  assert.ok(json(h.cli('list')).every((t) => t.settings.autonomy === 'ask'));
 });
 
 test('tentacle files apply to MCP runs; MCP clients cannot store settings', async () => {

@@ -9,7 +9,9 @@
 //   krakenmcp prune [--older-than 30] [--dry-run] [--worktrees]
 //        delete logs/result files and stored prompts of runs finished more than N days ago; list
 //        unmerged worktrees (--worktrees also discards the stale ones)
-//   krakenmcp mode [ask|auto]               show/set approval: auto merges approved, verified, conflict-free branches
+//   krakenmcp chain list|edit <name>|remove <name>
+//        your chains in ~/.kraken/chains/<name>.md: list the resolved chains, edit one (created if
+//        missing, then checked), or remove your file (a built-in goes back to its defaults)
 //   krakenmcp show [run_id] [--open|--log]  a run's full result (default: the newest run with one);
 //        --open opens the result file in $VISUAL / $EDITOR, --log prints the raw agent output
 //   krakenmcp update                        reinstall a global git install and print the old -> new version
@@ -21,7 +23,8 @@ import { spawnSync } from 'node:child_process';
 import { knownNames, resolveTentacle, NAME, userDir, userTentacles, tentacleTemplate, BUILTIN } from './tentacles.js';
 import { PLANS_DIR, LOGS_DIR, ROOT, VERSION, db, getRun, setSetting } from './store.js';
 import { maxParallel } from './scheduler.js';
-import { approvalMode } from './branches.js';
+import { knownChains, resolveChain, checkChain, userChainDir, userChains, chainTemplate, parseChainFile,
+  BUILTIN_CHAINS } from './chains.js';
 import { pruneData } from './prune.js';
 import { checkAgents } from './agents.js';
 import { agentReport } from './runs.js';
@@ -32,7 +35,7 @@ const opt = (f) => { const i = argv.indexOf(f); if (i < 0) return null; const v 
 
 const openIt = flag('--open'), showLog = flag('--log');
 const cwd = resolve(opt('--cwd') ?? process.cwd());
-const [cmd, name] = argv;
+const [cmd, name, arg2] = argv;
 const out = (o) => console.log(JSON.stringify(o, null, 2));
 
 const real = (p) => { try { return realpathSync(p); } catch { return null; } };
@@ -63,6 +66,51 @@ function updateKraken() {
   out({ updated: to !== VERSION, from: VERSION, to, note: 'restart your MCP client: the server starts with the client' });
 }
 
+function chainInfo(name) {
+  const c = resolveChain(name), k = checkChain(c, cwd);
+  return { name, builtin: c.builtin, description: c.description, user_file: c.user_file, max_fix_rounds: c.max_fix_rounds,
+    stages: k.stages.map((s) => ({ tentacle: s.tentacle, kind: s.kind, autonomy: `${s.autonomy} (${s.autonomy_source})`,
+      stage_settings: Object.keys(s.layer).length ? s.layer : undefined })),
+    sources: c.sources, notes: c.notes, problems: k.problems.length ? k.problems : undefined };
+}
+
+// krakenmcp chain list | edit <name> | remove <name>
+function chainCommand(sub, chainName) {
+  if (sub === 'list' || sub === undefined) {
+    const problems = userChains().problems;
+    out({ dir: userChainDir(), chains: knownChains().map((n) => { try { return chainInfo(n); } catch (e) { return { name: n, error: e.message }; } }),
+      problems: problems.length ? problems : undefined });
+    return;
+  }
+  if (!['edit', 'remove'].includes(sub)) throw new Error('usage: krakenmcp chain list|edit <name>|remove <name>');
+  if (!chainName || !NAME.test(chainName)) throw new Error(`usage: krakenmcp chain ${sub} <name> (lowercase letters, digits, - or _)`);
+  const file = join(userChainDir(), `${chainName}.md`);
+  if (sub === 'remove') {
+    if (!existsSync(file)) {
+      throw new Error(BUILTIN_CHAINS[chainName] ? `${chainName} has no changes to remove; it is already the built-in`
+        : `no chain ${chainName} (no ${file})`);
+    }
+    rmSync(file);
+    out({ removed: file, note: BUILTIN_CHAINS[chainName] ? `${chainName} is back to the built-in` : `${chainName} is gone` });
+    return;
+  }
+  const created = !existsSync(file);
+  if (created) { mkdirSync(userChainDir(), { recursive: true }); writeFileSync(file, chainTemplate(chainName)); }
+  const editor = process.env.VISUAL || process.env.EDITOR;
+  if (editor) {
+    const r = spawnSync(`${editor} "${file}"`, { stdio: 'inherit', shell: true });
+    if (r.error || r.status) throw new Error(`the editor exited with an error${r.error ? `: ${r.error.message}` : ''}`);
+  }
+  let problem;
+  try { parseChainFile(readFileSync(file, 'utf8')); } catch (e) { problem = e.message; }
+  const info = problem ? null : chainInfo(chainName);
+  if (!problem && info.problems) problem = info.problems.join('; ');
+  if (problem) { out({ file, problem }); process.exitCode = 1; return; }
+  out({ file, created: created || undefined,
+    note: editor ? undefined : 'Set $VISUAL or $EDITOR to open it automatically; edit the file, then run this again to check it.',
+    chain: info });
+}
+
 try {
   switch (cmd) {
     case 'list':
@@ -70,6 +118,9 @@ try {
         const t = resolveTentacle(n, cwd);
         return { name: n, settings: { ...t.settings, prompt: `${t.settings.prompt.slice(0, 60)}…` }, sources: t.sources };
       }));
+      break;
+    case 'chain':
+      chainCommand(name, arg2);
       break;
     case 'edit': {
       // krakenmcp edit <name>: your tentacle file for <name> (a built-in or your own), in $VISUAL / $EDITOR
@@ -132,19 +183,6 @@ try {
       process.exitCode = rep.problems.length ? 1 : 0;
       break;
     }
-    case 'mode': {
-      // krakenmcp mode [ask|auto]: whether merge asks the developer (default) or lands approved work by itself
-      if (name !== undefined) {
-        if (!['ask', 'auto'].includes(name)) throw new Error('mode is "ask" or "auto"');
-        setSetting('approval_mode', name === 'auto' ? 'auto' : null);
-      }
-      out({ approval_mode: approvalMode(),
-        note: approvalMode() === 'auto'
-          ? 'merge(run_id) and pipelines merge by themselves when the latest review approves, verify passed, and nothing ' +
-            'conflicts or is uncommitted. Anything else still shows a preview and waits for you. discard always asks.'
-          : 'merge(run_id) shows a preview; it merges only after you approve it.' });
-      break;
-    }
     case 'show': {
       const run = name ? getRun(name)
         : db.prepare("SELECT * FROM runs WHERE result IS NOT NULL AND result != '' ORDER BY created_at DESC LIMIT 1").get();
@@ -172,7 +210,7 @@ try {
       updateKraken();
       break;
     default:
-      console.log('usage: krakenmcp doctor|show|list|edit|remove|limit|mode|prune|update|version ' +
+      console.log('usage: krakenmcp doctor|show|list|edit|remove|chain|limit|prune|update|version ' +
         '[args] [--cwd <repo>]');
       process.exit(cmd ? 1 : 0);
   }

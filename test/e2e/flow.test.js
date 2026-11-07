@@ -11,9 +11,14 @@ after(() => h.cleanup());
 
 test('server exposes the documented tools and instructions', async () => {
   const tools = (await k.c.listTools()).tools.map((t) => t.name).sort();
-  assert.deepEqual(tools, ['cancel', 'discard', 'execute', 'explain', 'merge',
-    'pipeline', 'plan', 'resume', 'review', 'run', 'session', 'status', 'tentacles', 'think', 'update']);
-  assert.match(k.c.getInstructions(), /only after\s+they explicitly approve/);
+  assert.deepEqual(tools, ['cancel', 'chain', 'discard', 'execute', 'explain', 'merge',
+    'plan', 'resume', 'review', 'run', 'session', 'status', 'tentacles', 'think', 'update']);
+  const ins = k.c.getInstructions();
+  assert.match(ins, /only after\s+they explicitly approve/);
+  assert.match(ins, /follow its `next`/);
+  assert.match(ins, /work in auto for this session/);
+  assert.match(ins, /never covers questions/);
+  assert.match(ins, /chain\(task/);
   assert.match(k.c.getInstructions(), /do not retry it and do not switch agent, model or effort/);
   const info = k.c.getServerVersion();
   assert.equal(info.name, 'kraken');
@@ -24,23 +29,28 @@ test('think -> plan with context -> execute -> review -> merge lands the change'
   const think = await k.wait((await k.call('think', { problem: 'how should feature.js work?', cwd: h.repo })).run_id);
   assert.equal(think.status, 'done');
   assert.equal(think.access, 'read');
+  assert.equal(think.autonomy, 'ask');
+  assert.match(think.next, new RegExp(`^ask:.*plan\\(.*"${think.id}"`));
 
   planRun = await k.wait((await k.call('plan', { task: 'add feature.js', context_runs: [think.id] })).run_id);
   assert.equal(planRun.status, 'done');
   assert.ok(h.row(planRun.id).prompt.includes(`--- CONTEXT: think run ${think.id}`), 'plan prompt carries the think result');
   assert.equal(planRun.workdir, h.repo, 'repo is taken from the context run');
+  assert.match(planRun.next, new RegExp(`^ask:.*execute\\("${planRun.id}"\\)`));
 
   execRun = await k.wait((await k.call('execute', { plan_id: planRun.id, verify: 'echo verify-ok' })).run_id);
   assert.equal(execRun.status, 'done');
   assert.match(execRun.branch, /^kraken\/execute_/);
   assert.equal(commitsOn(h, execRun.branch), 1);
   assert.equal(execRun.verify.exit, 0);
+  assert.match(execRun.next, new RegExp(`^ask:.*review\\(run_id: "${execRun.id}"\\)`));
   assert.deepEqual(execRun.summary.milestones.verify, { cmd: 'echo verify-ok', exit: 0 });
   assert.deepEqual(execRun.metrics.diff, { files: 1, insertions: 1, deletions: 0 });
   assert.equal(existsSync(join(h.repo, 'feature.js')), false, 'main checkout untouched before merge');
 
   const review = await k.wait((await k.call('review', { run_id: execRun.id })).run_id);
   assert.equal(review.verdict, 'approve');
+  assert.match(review.next, new RegExp(`^ask:.*merge\\("${execRun.id}"\\)`));
   assert.equal(review.workdir, execRun.workdir, 'reviewer reads the changed files in the worktree');
   const reviewPrompt = h.row(review.id).prompt;
   assert.ok(reviewPrompt.includes('--- DIFF ---') && reviewPrompt.includes('+export const v'));
@@ -52,10 +62,15 @@ test('think -> plan with context -> execute -> review -> merge lands the change'
   assert.equal(preview.commits.length, 1);
   assert.equal(preview.review.verdict, 'approve');
   assert.deepEqual(preview.warnings, []);
+  assert.equal(preview.review_autonomy, 'ask');
+  assert.match(preview.auto_merge_blocked_by.join(), /passed in the call/, 'blockers are reported even under ask');
+  assert.match(preview.next, /^ask:/);
   assert.equal((await k.raw('merge', { run_id: execRun.id, confirm: 'not-the-token' })).isError, true);
 
   const merged = await k.call('merge', { run_id: execRun.id, confirm: preview.confirm_token });
   assert.equal(merged.outcome, 'merged');
+  assert.equal(merged.auto, undefined);
+  assert.match((await k.call('status', { run_id: execRun.id })).next, /^stop: it was merged/);
   assert.ok(readFileSync(join(h.repo, 'feature.js'), 'utf8').includes('export const v'), 'the change is in main');
   assert.equal(h.git('branch', '--list', execRun.branch), '', 'branch deleted');
   assert.equal(existsSync(execRun.workdir), false, 'worktree removed');
@@ -68,6 +83,8 @@ test('review of uncommitted changes, and refusal when there is nothing to review
   assert.equal(r.status, 'done');
   assert.equal(r.workdir, h.repo);
   assert.equal(r.target_run, undefined);
+  assert.match(r.next, /^ask:.*nothing to merge/);
+  assert.doesNotMatch(r.next, /merge\(/);
   assert.ok(h.row(r.id).prompt.includes('-export const one = 1;'));
   h.git('checkout', '-q', 'math.js');
   assert.match((await k.raw('review', { cwd: h.repo })).text, /no uncommitted changes/);
@@ -78,6 +95,7 @@ test('a failing verify ends as verify_failed but keeps the work committed for re
   assert.equal(r.status, 'verify_failed');
   assert.equal(r.verify.exit, 3);
   assert.match(r.verify.output, /boom/);
+  assert.match(r.next, new RegExp(`^stop:.*resume\\("${r.id}"`));
   assert.equal(commitsOn(h, r.branch), 1);
   await k.call('discard', { run_id: r.id });
 });
@@ -116,6 +134,7 @@ test('explain is read-only and runs in place without a branch', async () => {
   assert.equal(r.status, 'done');
   assert.equal(r.access, 'read');
   assert.equal(r.branch, undefined);
+  assert.match(r.next, /^ask:.*result_file/);
   assert.ok(h.argsLog().at(-1).includes('--agent plan'), 'read tentacles use the agent\'s read-only mode');
 });
 

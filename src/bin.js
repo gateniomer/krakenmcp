@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // `krakenmcp`            start the MCP server (stdio) — what MCP clients run
-// `krakenmcp <command>`  developer CLI: doctor | show | list | edit | remove | mode | limit | prune | update
+// `krakenmcp <command>`  developer CLI: doctor | show | list | edit | remove | chain | limit | prune | update
 // `krakenmcp --version`  print the installed version (no DB or data dir is touched)
 import './quiet.js'; // before anything loads node:sqlite (the rest is imported dynamically below)
 import { readFileSync } from 'node:fs';

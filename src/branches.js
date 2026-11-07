@@ -2,7 +2,8 @@
 // update (merge the developer's branch in), and the diff a review reads.
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { db, IN_PROGRESS, getRun, addMessage, latestReview, getSetting } from './store.js';
+import { db, IN_PROGRESS, getRun, addMessage, latestReview } from './store.js';
+import { resolveTentacle } from './tentacles.js';
 import { mustRun, resumeRun } from './control.js';
 
 export const gitIn = (dir, ...args) =>
@@ -65,9 +66,14 @@ export function discardRun(id) {
   return { run_id: id, outcome: 'discarded', branch: run.branch };
 }
 
-// ---- approval mode: "ask" (default) or "auto" (krakenmcp mode auto) ----
+// ---- merging follows the review tentacle's autonomy: ask (default) or auto ----
 
-export const approvalMode = () => (getSetting('approval_mode') === 'auto' ? 'auto' : 'ask');
+// The autonomy of the tentacle behind the branch's latest review; no review means ask.
+export function reviewAutonomy(run) {
+  const review = latestReview(run.id);
+  if (!review) return 'ask';
+  try { return resolveTentacle(review.tentacle, run.cwd).autonomy; } catch { return 'ask'; }
+}
 
 // Where the branch's verify command came from: the first run on the branch resolved it.
 const verifySource = (run) => {
@@ -75,12 +81,12 @@ const verifySource = (run) => {
   try { return JSON.parse(first?.config ?? '{}').sources?.verify; } catch { return undefined; }
 };
 
-// Why a branch may not merge without asking, in auto mode. Empty: approved, verified, clean.
+// Why a branch may not merge without a preview. Empty: approved, verified, clean.
 function autoMergeBlockers(run, { review, conflicts, uncommitted, commits, dirty }) {
   return [
     run.status !== 'done' ? `run status is ${run.status}` : null,
     review?.verdict !== 'approve' ? `the latest review ${review ? `says ${review.verdict ?? review.status}` : 'is missing'}` : null,
-    !run.verify_cmd ? 'it has no verify command (auto mode merges only verified work)' : null,
+    !run.verify_cmd ? 'it has no verify command (merging without a preview needs verified work)' : null,
     run.verify_cmd && verifySource(run) === 'call'
       ? 'its verify command was passed in the call, not set by the developer (verify: in ~/.kraken/tentacles/execute.md)' : null,
     conflicts === null || conflicts.length ? 'merging may conflict' : null,
@@ -92,8 +98,9 @@ function autoMergeBlockers(run, { review, conflicts, uncommitted, commits, dirty
 
 // Two-step merge: without `confirm` it returns a preview and a confirm token (the branch head).
 // The head must show the preview to the developer and only confirm after they say yes.
-// In auto mode a branch with no blockers (see above) merges at once instead.
-export function mergeRun(id, confirm) {
+// When the review's autonomy is auto, a branch with no blockers (see above) merges at once instead.
+// The blockers are always reported, so a head working in auto for a session can check them.
+export function mergeRun(id, confirm, { autonomy } = {}) {
   const run = branchRun(id);
   const head = tryGit(run.cwd, 'rev-parse', run.branch);
   if (!head) throw new Error(`branch ${run.branch} no longer exists`);
@@ -104,14 +111,14 @@ export function mergeRun(id, confirm) {
   const review = latestReview(id);
   const conflicts = predictConflicts(run.cwd, 'HEAD', run.branch);
   const dirty = gitIn(run.cwd, 'status', '--porcelain', '--untracked-files=no');
-  const mode = approvalMode();
-  const blockers = mode === 'auto' && !confirm ? autoMergeBlockers(run, { review, conflicts, uncommitted, commits, dirty }) : null;
-  const auto = blockers?.length === 0;
+  const mode = autonomy ?? reviewAutonomy(run);
+  const blockers = confirm ? null : autoMergeBlockers(run, { review, conflicts, uncommitted, commits, dirty });
+  const auto = mode === 'auto' && blockers?.length === 0;
   if (auto) confirm = head;
 
   if (!confirm) {
     return {
-      approval_mode: mode, auto_merge_blocked_by: blockers ?? undefined,
+      review_autonomy: mode, auto_merge_blocked_by: blockers,
       run_id: id, preview: true, branch: run.branch, into: target, repo: run.cwd,
       commits: commits ? commits.split('\n') : [],
       diffstat: tryGit(run.cwd, 'diff', '--stat', `${base}...${run.branch}`),
@@ -128,7 +135,7 @@ export function mergeRun(id, confirm) {
       ].filter(Boolean),
       conflicts: conflicts ?? 'unknown (git 2.38+ needed to predict)',
       confirm_token: head,
-      next: 'Show this preview to the developer. Only after they approve, call merge again with confirm = confirm_token.',
+      next: 'ask: show this preview to the developer; call merge again with confirm = confirm_token only after they approve',
     };
   }
   if (confirm !== head) throw new Error('confirm token does not match the branch head (it changed); preview again');
@@ -148,9 +155,9 @@ export function mergeRun(id, confirm) {
   tryGit(run.cwd, 'branch', '-d', run.branch);
   setBranchOutcome(run.branch, 'merged', `merged into ${target} as ${mergeCommit}`);
   addMessage({ session: run.session, run_id: id, sender: 'kraken', kind: 'merged',
-    body: `merged into ${target} (${mergeCommit})${auto ? ' automatically (approval mode auto)' : ''}` });
+    body: `merged into ${target} (${mergeCommit})${auto ? ' automatically (review autonomy auto)' : ''}` });
   return { run_id: id, outcome: 'merged', into: target, merge_commit: mergeCommit, branch_deleted: run.branch,
-    auto: auto || undefined, note: auto ? 'auto mode: the review approved and verify passed, so it merged without asking' : undefined };
+    auto: auto || undefined, note: auto ? 'review autonomy is auto: the review approved and verify passed, so it merged without asking' : undefined };
 }
 
 // ---- update: bring a run's branch up to date with the developer's current branch ----

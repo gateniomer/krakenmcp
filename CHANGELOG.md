@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] - 2026-11-07
+
+### Breaking
+- The `pipeline` tool is replaced by `chain`. Chain ids start with `chain_` and runs carry `chain_id`
+  instead of `pipeline_id`; old pipeline records are dropped.
+- `krakenmcp mode` and the `approval_mode` setting are removed (a stored setting is deleted). Merging
+  now follows the review tentacle's `autonomy`. `tentacles().limits.approval_mode` is gone, and the
+  merge preview has `review_autonomy` instead of `approval_mode`.
+- The default chain pauses after each stage whose tentacle's autonomy is `ask` (the default), so on a
+  fresh install it pauses after plan and after execute.
+- A failed `verify` with no fix rounds left pauses a chain instead of going on to review.
+
+### Added
+- `autonomy: ask | auto` on every tentacle: whether the head (or a chain) may take the step after a
+  successful run without asking. Questions, failures and `verify_failed` always stop.
+- Chains: an ordered list of tentacle stages in a file, built in (`src/chains/default.md`) or your own
+  (`~/.kraken/chains/<name>.md`), with per-stage settings, approval pauses answered with
+  `resume(chain_id, reply)`, and `krakenmcp chain list|edit|remove`.
+- Every finished run and chain returns a `next` starting with `ask:`, `auto:` or `stop:`.
+- The server instructions describe a session override ("work in auto this session") that the head
+  follows without storing anything; it never covers questions, failures or merge blockers.
+- The merge preview always lists `auto_merge_blocked_by`.
+
+### Fixed
+- The docs said the pipeline "stops before merge" while in auto mode it merged by itself.
+
 ## [1.2.0] - 2026-11-07
 
 ### Added

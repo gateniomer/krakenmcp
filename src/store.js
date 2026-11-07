@@ -63,7 +63,9 @@ db.exec(`
     diff_stat      TEXT,                   -- JSON {files, insertions, deletions}
     verify_cmd     TEXT,
     verify_exit    INTEGER,
-    verify_output  TEXT
+    verify_output  TEXT,
+    chain_id       TEXT,
+    chain_stage    INTEGER                 -- index of the chain stage this run belongs to
   );
   CREATE INDEX IF NOT EXISTS runs_status ON runs (status);
   CREATE TABLE IF NOT EXISTS messages (
@@ -75,26 +77,30 @@ db.exec(`
     body       TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
-  -- Server-wide settings, e.g. max_parallel, approval_mode.
+  -- Server-wide settings, e.g. max_parallel.
   CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
-  -- Pipelines: plan -> execute -> review (-> resume + review again), driven by pipeline.js.
-  CREATE TABLE IF NOT EXISTS pipelines (
+  -- Chains: an ordered list of tentacle stages (src/chains/, ~/.kraken/chains/), driven by chain.js.
+  DROP TABLE IF EXISTS pipelines;
+  CREATE TABLE IF NOT EXISTS chains (
     id           TEXT PRIMARY KEY,
     session      TEXT NOT NULL DEFAULT 'default',
+    name         TEXT NOT NULL DEFAULT 'default',
     task         TEXT NOT NULL,
     cwd          TEXT NOT NULL,
-    options      TEXT NOT NULL,          -- JSON: verify, max_fix_rounds, context_runs, overrides per stage
+    options      TEXT NOT NULL,          -- JSON: verify, max_fix_rounds, context_runs, overrides
+    stages       TEXT NOT NULL,          -- JSON snapshot of the checked stages (checkChain)
     status       TEXT NOT NULL DEFAULT 'running', -- running | waiting | done | failed | cancelled
-    stage        TEXT NOT NULL DEFAULT 'plan',    -- plan | execute | review | fix | finished
-    current_run  TEXT,                   -- the run the pipeline is waiting on
-    plan_run     TEXT,
-    exec_run     TEXT,                   -- latest write run on the branch (execute or its fix)
-    review_run   TEXT,
+    stage_index  INTEGER NOT NULL DEFAULT 0,
+    stage        TEXT,                   -- tentacle of the current stage, fix, or finished
+    current_run  TEXT,                   -- the run the chain is waiting on
+    write_run    TEXT,                   -- latest write run on the branch (the write stage or its fix)
+    pause        TEXT,                   -- JSON {reason: approval | verify_failed, after, next_stage}
+    note         TEXT,                   -- the developer's input for the next stage
     fix_rounds   INTEGER NOT NULL DEFAULT 0,
-    pid          INTEGER,                -- driver process
+    pid          INTEGER,                -- driver process; null while paused
     cancel_requested INTEGER NOT NULL DEFAULT 0,
     result       TEXT,
     error        TEXT,
@@ -111,11 +117,12 @@ function addColumns(table, cols) {
 addColumns('runs', {
   cancel_requested: 'INTEGER NOT NULL DEFAULT 0', // set by cancel(); the worker polls it (portable, no signals)
   stop_reason: 'TEXT',                            // why Kraken stopped it: budget details
-  pipeline_id: 'TEXT',
+  chain_id: 'TEXT',
+  chain_stage: 'INTEGER',
 });
 // Left by older versions: stored tentacle settings, their change log, repo-file trust, daily budget.
 db.exec(`DROP TABLE IF EXISTS tentacles; DROP TABLE IF EXISTS config_changes;
-  DELETE FROM settings WHERE key LIKE 'trust:%' OR key = 'daily_budget_usd';`);
+  DELETE FROM settings WHERE key LIKE 'trust:%' OR key = 'daily_budget_usd' OR key = 'approval_mode';`);
 
 // Statuses: queued, running (in progress); done, failed, verify_failed, timeout, cancelled,
 // over_budget (stopped at max_cost_usd / max_tokens); waiting (the agent asked the developer a
@@ -132,12 +139,12 @@ export const newId = (prefix) =>
 export function insertRun(r) {
   db.prepare(`INSERT INTO runs (id, session, tentacle, access, plan_id, task, agent, model, effort, prompt, config,
                 timeout_min, cwd, workdir, branch, verify_cmd, base_sha, resumed_from, native_session, target_run,
-                pipeline_id, created_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+                chain_id, chain_stage, created_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(r.id, r.session, r.tentacle, r.access, r.plan_id ?? null, r.task, r.agent, r.model ?? null,
          r.effort ?? null, r.prompt, r.config ? JSON.stringify(r.config) : null, r.timeout_min ?? null,
          r.cwd, r.workdir, r.branch ?? null, r.verify_cmd ?? null, r.base_sha ?? null, r.resumed_from ?? null,
-         r.native_session ?? null, r.target_run ?? null, r.pipeline_id ?? null, nowIso());
+         r.native_session ?? null, r.target_run ?? null, r.chain_id ?? null, r.chain_stage ?? null, nowIso());
 }
 
 export const getRun = (id) => db.prepare('SELECT * FROM runs WHERE id = ?').get(id);
@@ -160,9 +167,9 @@ export const recentMessages = (runId, limit = 5) =>
 export const messagesSince = (runId, since = 0, limit = 200) =>
   db.prepare('SELECT id, run_id, sender, kind, body FROM messages WHERE run_id = ? AND id > ? ORDER BY id LIMIT ?')
     .all(runId, since, limit);
-export const pipelineMessagesSince = (pid, since = 0, limit = 200) =>
+export const chainMessagesSince = (pid, since = 0, limit = 200) =>
   db.prepare(`SELECT m.id, m.run_id, m.sender, m.kind, m.body FROM messages m JOIN runs r ON r.id = m.run_id
-              WHERE r.pipeline_id = ? AND m.id > ? ORDER BY m.id LIMIT ?`).all(pid, since, limit);
+              WHERE r.chain_id = ? AND m.id > ? ORDER BY m.id LIMIT ?`).all(pid, since, limit);
 // Read every row after `since` (page by page), for the final reply: nothing may be dropped.
 export const messagesSinceAll = (runId, since = 0) => {
   const out = [];
@@ -173,10 +180,10 @@ export const messagesSinceAll = (runId, since = 0) => {
     after = rows.at(-1).id;
   }
 };
-export const pipelineMessagesSinceAll = (pid, since = 0) => {
+export const chainMessagesSinceAll = (pid, since = 0) => {
   const out = [];
   for (let after = since;;) {
-    const rows = pipelineMessagesSince(pid, after);
+    const rows = chainMessagesSince(pid, after);
     out.push(...rows);
     if (rows.length < 200) return out;
     after = rows.at(-1).id;
@@ -184,16 +191,16 @@ export const pipelineMessagesSinceAll = (pid, since = 0) => {
 };
 export const lastMessageId = (runId) =>
   db.prepare('SELECT MAX(id) AS id FROM messages WHERE run_id = ?').get(runId)?.id ?? 0;
-export const lastPipelineMessageId = (pid) =>
-  db.prepare('SELECT MAX(m.id) AS id FROM messages m JOIN runs r ON r.id = m.run_id WHERE r.pipeline_id = ?').get(pid)?.id ?? 0;
-export const pipelineRuns = (pid) =>
-  db.prepare('SELECT id, tentacle, resumed_from, config, cost_usd FROM runs WHERE pipeline_id = ? ORDER BY created_at, rowid').all(pid);
-// Every tool line of a run (or of all runs of a pipeline), for the live summary's tool count.
+export const lastChainMessageId = (pid) =>
+  db.prepare('SELECT MAX(m.id) AS id FROM messages m JOIN runs r ON r.id = m.run_id WHERE r.chain_id = ?').get(pid)?.id ?? 0;
+export const chainRuns = (cid) =>
+  db.prepare('SELECT id, tentacle, resumed_from, config, cost_usd, chain_stage, status FROM runs WHERE chain_id = ? ORDER BY created_at, rowid').all(cid);
+// Every tool line of a run (or of all runs of a chain), for the live summary's tool count.
 export const toolMessages = (runId) =>
   db.prepare("SELECT body FROM messages WHERE run_id = ? AND kind = 'progress' AND body LIKE 'tool: %' ORDER BY id").all(runId);
-export const pipelineToolMessages = (pid) =>
+export const chainToolMessages = (pid) =>
   db.prepare(`SELECT m.body FROM messages m JOIN runs r ON r.id = m.run_id
-              WHERE r.pipeline_id = ? AND m.kind = 'progress' AND m.body LIKE 'tool: %' ORDER BY m.id`).all(pid);
+              WHERE r.chain_id = ? AND m.kind = 'progress' AND m.body LIKE 'tool: %' ORDER BY m.id`).all(pid);
 
 export const listRuns = (session, limit = 20) =>
   db.prepare(`SELECT id, tentacle, access, plan_id, agent, model, effort, status, outcome, verdict, duration_ms, cost_usd,
@@ -205,28 +212,28 @@ export const allRuns = (session) =>
 
 // Latest review of a run (review runs record target_run + verdict).
 export const latestReview = (runId) =>
-  db.prepare(`SELECT id, status, verdict, agent, model, finished_at FROM runs
-              WHERE target_run = ? AND tentacle = 'review' ORDER BY created_at DESC LIMIT 1`).get(runId);
+  db.prepare(`SELECT id, tentacle, status, verdict, agent, model, finished_at FROM runs
+              WHERE target_run = ? AND (tentacle = 'review' OR verdict IS NOT NULL) ORDER BY created_at DESC LIMIT 1`).get(runId);
 
 // The run that resumed `id` (answer / resume create a new run with resumed_from = id).
 export const resumedBy = (id) =>
   db.prepare('SELECT id FROM runs WHERE resumed_from = ? ORDER BY created_at DESC LIMIT 1').get(id)?.id ?? null;
 
-// ---- pipelines ----
+// ---- chains ----
 
-export function insertPipeline(p) {
-  db.prepare('INSERT INTO pipelines (id, session, task, cwd, options, created_at) VALUES (?,?,?,?,?,?)')
-    .run(p.id, p.session, p.task, p.cwd, JSON.stringify(p.options), nowIso());
+export function insertChain(c) {
+  db.prepare('INSERT INTO chains (id, session, name, task, cwd, options, stages, stage, created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(c.id, c.session, c.name, c.task, c.cwd, JSON.stringify(c.options), JSON.stringify(c.stages), c.stage ?? null, nowIso());
 }
-export const getPipeline = (id) => db.prepare('SELECT * FROM pipelines WHERE id = ?').get(id);
-export function updatePipeline(id, fields) {
+export const getChain = (id) => db.prepare('SELECT * FROM chains WHERE id = ?').get(id);
+export function updateChain(id, fields) {
   const keys = Object.keys(fields);
-  db.prepare(`UPDATE pipelines SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`)
+  db.prepare(`UPDATE chains SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`)
     .run(...keys.map((k) => fields[k]), id);
 }
-export const listPipelines = (session, limit = 20) =>
-  db.prepare(`SELECT id, status, stage, current_run, fix_rounds, substr(task,1,80) AS task, created_at, finished_at
-              FROM pipelines WHERE session = ? ORDER BY created_at DESC LIMIT ?`).all(session, limit);
+export const listChains = (session, limit = 20) =>
+  db.prepare(`SELECT id, name, status, stage, stage_index, current_run, fix_rounds, substr(task,1,80) AS task, created_at, finished_at
+              FROM chains WHERE session = ? ORDER BY created_at DESC LIMIT ?`).all(session, limit);
 
 // ---- server-wide settings ----
 

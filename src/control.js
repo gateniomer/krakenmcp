@@ -61,10 +61,10 @@ export function resumeRun(id, input, { session, answering = false, syncBase, mer
     id: newRunId, session: session ?? prev.session, tentacle: prev.tentacle, access: prev.access, plan_id: prev.plan_id,
     task: prev.task, agent: prev.agent, model: prev.model, effort: prev.effort,
     prompt: renderResumePrompt(prev.access, prev.workdir, text),
-    config: { resumed_from: id, answering, limits: prevLimits(prev), sync_base: syncBase },
+    config: { resumed_from: id, answering, limits: prevLimits(prev), sync_base: syncBase, needs_diff: prevNeedsDiff(prev) || undefined },
     timeout_min: prev.timeout_min, cwd: prev.cwd, workdir: prev.workdir, branch: prev.branch,
     verify_cmd: prev.verify_cmd, base_sha: prev.base_sha, resumed_from: id, native_session: prev.native_session,
-    target_run: prev.target_run, pipeline_id: prev.pipeline_id,
+    target_run: prev.target_run, chain_id: prev.chain_id, chain_stage: prev.chain_stage,
   });
   if (answering) {
     updateRun(id, { status: 'answered' });
@@ -79,3 +79,4 @@ export function resumeRun(id, input, { session, answering = false, syncBase, mer
 }
 
 const prevLimits = (run) => { try { return JSON.parse(run.config)?.limits; } catch { return undefined; } };
+const prevNeedsDiff = (run) => { try { return !!JSON.parse(run.config)?.needs_diff; } catch { return false; } };

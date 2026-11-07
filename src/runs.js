@@ -5,11 +5,11 @@ import { join, resolve } from 'node:path';
 import { resolveAgent, AGENTS } from './agents.js';
 import {
   PLANS_DIR, LOGS_DIR, WORKTREES_DIR, IN_PROGRESS, newId, insertRun, getRun, recentMessages, messagesSince,
-  messagesSinceAll, lastMessageId, allRuns, latestReview, listRuns, listPipelines, toolMessages, db,
+  messagesSinceAll, lastMessageId, allRuns, latestReview, listRuns, listChains, toolMessages, resumedBy, db,
 } from './store.js';
 import { pump, queueInfo } from './scheduler.js';
 import { reviewInput, gitIn } from './branches.js';
-import { resolveTentacle, renderPrompt, formatContext, knownNames } from './tentacles.js';
+import { resolveTentacle, renderPrompt, formatContext, knownNames, stageKind } from './tentacles.js';
 
 export function isGitRepo(dir) {
   try { execFileSync('git', ['-C', dir, 'rev-parse', '--is-inside-work-tree'], { stdio: 'ignore' }); return true; }
@@ -49,6 +49,52 @@ export const STOP_NEXT = 'stop: report this error to the developer and ask how t
   'do not retry or switch agent/model on your own';
 const STOP = ['failed', 'timeout', 'over_budget'];
 
+// The one step after a finished run. ask: = show the result, suggest exactly that step and wait;
+// auto: = the developer allowed the head to take it; stop: = report and wait. Hard stops (questions,
+// failures, verify_failed) never depend on autonomy. Pure, so it is unit-tested on its own.
+export function finishedNext(f) {
+  const mode = f.autonomy === 'auto' ? 'auto' : 'ask';
+  if (f.status === 'waiting') return `ask: put the question to the developer, then resume("${f.id}", their reply)`;
+  if (STOP.includes(f.status)) return STOP_NEXT;
+  if (f.status === 'cancelled') return 'stop: tell the developer it was cancelled and wait';
+  if (f.chain_id) return `this run is a stage of chain ${f.chain_id}; follow status("${f.chain_id}")`;
+  if (f.status === 'answered' || f.newer_run) return f.newer_run ? `follow status("${f.newer_run}")` : undefined;
+  if (f.outcome) return `stop: it was ${f.outcome}; ask the developer what is next`;
+  if (f.status === 'verify_failed') {
+    return `stop: show the verify output; suggest resume("${f.id}", "fix the failing check") or discard("${f.id}")`;
+  }
+  if (f.status !== 'done') return undefined;
+  if (f.kind === 'write') return `${mode}: show the diff stat and verify result; suggest review(run_id: "${f.id}")`;
+  if (f.kind === 'review') {
+    if (!f.target_run) return 'ask: show the findings; the changes are the developer\'s own, nothing to merge';
+    if (f.verdict === 'approve') {
+      return mode === 'auto'
+        ? `auto: call merge("${f.target_run}"); it lands at once if nothing blocks it, otherwise show the preview`
+        : `ask: show the verdict; suggest merge("${f.target_run}")`;
+    }
+    if (f.verdict === 'changes_requested') {
+      return `${mode}: show the findings; suggest resume("${f.target_run}", "address the review findings"), then review again`;
+    }
+    return 'ask: show the review; ask the developer how to proceed';
+  }
+  if (f.tentacle === 'think') {
+    return mode === 'auto'
+      ? `auto: if it has no open questions call plan(task, context_runs: ["${f.id}"]); otherwise ask them first`
+      : `ask: relay the recommendation and its open questions; suggest plan(task + their answers, context_runs: ["${f.id}"])`;
+  }
+  if (f.tentacle === 'plan') return `${mode}: summarize the plan (result_file); suggest execute("${f.id}")`;
+  return `${mode}: give the developer result_file and a short summary; suggest plan(task, context_runs: ["${f.id}"]) if they want a change`;
+}
+
+// Kind and autonomy of a run's tentacle as the files say now (an edit applies to the next step).
+export function runFacts(run, { chain = true } = {}) {
+  let kind = run.access === 'write' ? 'write' : run.target_run || run.tentacle === 'review' ? 'review' : 'read';
+  let autonomy = 'ask';
+  try { const t = resolveTentacle(run.tentacle, run.cwd); kind = stageKind(t); autonomy = t.autonomy; } catch { /* tentacle file gone */ }
+  return { id: run.id, tentacle: run.tentacle, kind, status: run.status, verdict: run.verdict, target_run: run.target_run,
+    outcome: run.outcome, autonomy, newer_run: resumedBy(run.id), chain_id: chain ? run.chain_id : null };
+}
+
 export function describe(run, full = false) {
   const resultFile = join(PLANS_DIR, `${run.id}.md`);
   return {
@@ -57,8 +103,7 @@ export function describe(run, full = false) {
     agent: run.agent, model: run.model, effort: run.effort,
     task: clip(run.task, 200), plan_id: run.plan_id ?? undefined,
     question: run.status === 'waiting' ? run.question : undefined,
-    next: run.status === 'waiting' ? `ask the developer, then resume("${run.id}", their reply)`
-      : STOP.includes(run.status) ? STOP_NEXT : undefined,
+    ...nextOf(run),
     outcome: run.outcome ? `${run.outcome}: ${run.outcome_detail}` : undefined,
     verdict: run.verdict ?? undefined, target_run: run.target_run ?? undefined,
     resumed_from: run.resumed_from ?? undefined,
@@ -68,7 +113,7 @@ export function describe(run, full = false) {
     result: full ? run.result : clip(run.result),
     error: run.error ?? undefined,
     stopped: run.stop_reason ?? undefined,
-    pipeline: run.pipeline_id ?? undefined,
+    chain: run.chain_id ?? undefined,
     metrics: metrics(run),
     verify: run.verify_cmd
       ? { cmd: run.verify_cmd, exit: run.verify_exit, output: full ? run.verify_output : clip(run.verify_output, 600) }
@@ -77,6 +122,12 @@ export function describe(run, full = false) {
     recent_messages: recentMessages(run.id),
     cursor: lastMessageId(run.id),
   };
+}
+
+function nextOf(run) {
+  if (IN_PROGRESS.includes(run.status)) return {};
+  const f = runFacts(run);
+  return { next: finishedNext(f), autonomy: f.autonomy };
 }
 
 // ---- live feed: progress messages rendered as lines the head shows to the developer ----
@@ -219,7 +270,9 @@ export function runSummary(run, stage) {
 }
 
 // Create and start a run of any tentacle.
-export function startRun(name, { input, plan_id, context_runs = [], target_run, cwd, session, overrides, pipeline_id }) {
+// Chain stages pass chain_id / chain_stage, their stage settings as layers, and the developer's note.
+export function startRun(name, { input, plan_id, context_runs = [], target_run, cwd, session, overrides, chain_id,
+  chain_stage, layers = [], note }) {
   let planRun = null;
   if (plan_id) {
     planRun = getRun(plan_id);
@@ -237,7 +290,7 @@ export function startRun(name, { input, plan_id, context_runs = [], target_run, 
   let dir = resolve(cwd ?? targetRun?.cwd ?? planRun?.cwd ?? contextRuns[0]?.cwd ?? process.cwd());
   if (!existsSync(dir)) throw new Error(`cwd does not exist: ${dir}`);
 
-  const t = resolveTentacle(name, dir, overrides);
+  const t = resolveTentacle(name, dir, overrides, layers);
   const s = t.settings;
   resolveAgent(s.agent); // fails early if the agent is not installed
   const limits = { max_cost_usd: s.max_cost_usd ?? undefined, max_tokens: s.max_tokens ?? undefined };
@@ -271,13 +324,15 @@ export function startRun(name, { input, plan_id, context_runs = [], target_run, 
     base_sha = gitIn(dir, 'rev-parse', 'HEAD');
     execFileSync('git', ['-C', dir, 'worktree', 'add', '-b', branch, workdir, base_sha], { stdio: 'ignore' });
   }
-  const prompt = renderPrompt(t, { task, plan: planRun?.result, context: formatContext(contextRuns), diff, workdir, repo: t.repo });
+  let prompt = renderPrompt(t, { task, plan: planRun?.result, context: formatContext(contextRuns), diff, workdir, repo: t.repo });
+  if (note) prompt += `\n\nDeveloper note for this step: ${note}`;
   insertRun({
     id, session, tentacle: name, access: s.access, plan_id: planRun?.id, task, agent: s.agent, model: s.model,
     effort: s.effort, prompt,
-    config: { settings: { ...s, prompt: undefined }, sources: t.sources, context_runs: contextRuns.map((r) => r.id), limits },
+    config: { settings: { ...s, prompt: undefined }, sources: t.sources, context_runs: contextRuns.map((r) => r.id), limits,
+      needs_diff: t.needs_diff || undefined },
     timeout_min: s.timeout_min, cwd: dir, workdir, branch, verify_cmd: s.access === 'write' ? s.verify : null,
-    base_sha, target_run: targetRun?.id, pipeline_id,
+    base_sha, target_run: targetRun?.id, chain_id, chain_stage,
   });
   pump();
   return {
@@ -324,7 +379,7 @@ export function sessionSummary(session) {
   const all = allRuns(session);
   const ids = (pred) => all.filter(pred).map((r) => r.id);
   const stats = sessionStats(session);
-  const pipelines = listPipelines(session);
+  const chains = listChains(session);
   return {
     session,
     attention: {
@@ -337,7 +392,7 @@ export function sessionSummary(session) {
     total: stats.total,
     groups: stats.groups,
     runs: listRuns(session),
-    pipelines: pipelines.length ? pipelines : undefined,
+    chains: chains.length ? chains : undefined,
   };
 }
 

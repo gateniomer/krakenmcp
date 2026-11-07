@@ -141,7 +141,9 @@ child.on('close', (code) => {
   if (!stopReason && p.overBudget) { stopReason = 'over_budget'; stopDetail = `${run.agent} stopped at its --max-budget-usd cap`; }
   const ok = code === 0 && p.text && !stopReason;
   const question = ok ? p.text.match(/^\s*KRAKEN_QUESTION:\s*(.+)$/m)?.[1]?.trim() ?? null : null;
-  const verdict = ok && run.tentacle === 'review'
+  let needsDiff = false;
+  try { needsDiff = !!JSON.parse(run.config ?? '{}').needs_diff; } catch { /* unreadable config */ }
+  const verdict = ok && (run.tentacle === 'review' || needsDiff)
     ? p.text.match(/VERDICT:\s*\**\s*(approve|changes_requested)/i)?.[1]?.toLowerCase() ?? null : null;
   if (ok && run.access === 'read') writeFileSync(join(PLANS_DIR, `${runId}.md`), p.text + '\n');
 

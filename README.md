@@ -99,11 +99,19 @@ you:   Add a dark mode toggle to the settings page.
 
 head:  → plan("add a dark mode toggle")    runs on Claude Code + Opus
        ← a plan: theme setting, toggle, CSS variables
-       → execute(plan)                     runs on OpenCode, on branch kraken/execute_7f3a
+head:  Plan ready: theme setting, toggle, CSS variables. Execute it?
+
+you:   Yes.
+
+head:  → execute(plan)                     runs on OpenCode, on branch kraken/execute_7f3a
        ← done, tests pass
-       → review(run)                       runs on Claude Code + Opus
+head:  Done: 3 files changed, tests pass. Review it?
+
+you:   Yes.
+
+head:  → review(run)                       runs on Claude Code + Opus
        ← approve
-head:  Done and reviewed: 3 files changed. Merge it?
+head:  Approved. Merge it?
 
 you:   Yes.
 
@@ -111,7 +119,9 @@ head:  → merge(run)
 head:  Merged into main.
 ```
 
-`→` is a tool call the head makes, `←` is what comes back.
+`→` is a tool call the head makes, `←` is what comes back. The head stops after each step because
+every tentacle's autonomy is `ask` by default. Set `autonomy: auto` on a tentacle to let the head take
+the next step by itself, or tell the head "work in auto this session".
 
 To read what an agent wrote in full:
 
@@ -141,10 +151,51 @@ verify: npm test
 
 All fields are in [docs/reference.md](docs/reference.md#tentacle-fields-and-settings-layers).
 
+## Autonomy
+
+Every tentacle has `autonomy: ask | auto` (default `ask`). It decides what happens after the
+tentacle finishes successfully:
+
+- `ask`: the head shows the result, suggests one next step, and waits for you.
+- `auto`: the head (or a chain) takes that step without asking.
+
+Merging is the step after review, so the **review** tentacle's autonomy decides it. With
+`autonomy: auto` in `~/.kraken/tentacles/review.md`, an approved branch merges at once, but only
+when `verify` passed (a command from your files, not one the head passed in the call), nothing
+conflicts and nothing is uncommitted. Anything less shows the preview and waits.
+
+Some things always stop, whatever the autonomy: a question for you, a failed, timed-out or
+over-budget run, a failed `verify`, and `discard`. "Work in auto this session" only changes how
+the head behaves until you say otherwise; nothing is stored, and it never gets past these stops or
+the merge checks.
+
+## Chains
+
+A chain runs a list of tentacle stages by itself: `chain(task)`. The built-in `default` chain is
+plan → execute → review. After each stage whose autonomy is `ask` the chain pauses and the head asks
+you whether to go on, so on a fresh install it pauses after plan and after execute. When a review
+requests changes or `verify` fails, the chain sends the work back to the agent ("fix rounds") without
+pausing, up to `max_fix_rounds` (default 1; `0` turns them off).
+
+Write your own in `~/.kraken/chains/<name>.md`:
+
+```markdown
+---
+description: Plan and implement on my own, then let me look before the review
+stages: [{"tentacle": "plan", "autonomy": "auto"}, {"tentacle": "execute"}, {"tentacle": "review"}]
+max_fix_rounds: 2
+---
+```
+
+```sh
+krakenmcp chain list            # every chain, its stages and their autonomy
+krakenmcp chain edit <name>     # open your file for it (created if missing), then check it
+krakenmcp chain remove <name>   # delete your file; a built-in goes back to its defaults
+```
+
 ## Other settings
 
 ```sh
-krakenmcp mode auto         # merge by itself when the review approves and verify passes (default: ask)
 krakenmcp limit 3           # how many runs may work at once
 krakenmcp prune             # delete old logs and results
 ```

@@ -8,43 +8,50 @@ import { createServer } from './mcp.js';
 import { str, num, int, bool, oneOf, list, obj } from './schema.js';
 import { resolve } from 'node:path';
 import { agentInfo, checkAgents, AGENTS } from './agents.js';
-import { IN_PROGRESS, getRun, getPipeline, VERSION } from './store.js';
+import { IN_PROGRESS, getRun, getChain, VERSION } from './store.js';
 import { cancelRun, resumeRun } from './control.js';
 import { mergeRun, discardRun, syncBranch } from './branches.js';
 import { pump, maxParallel } from './scheduler.js';
-import { approvalMode } from './branches.js';
-import { startPipeline, cancelPipeline, describePipeline, isPipelineId, pipelineStatus, pipelineFeed,
-  pipelineSummary } from './pipeline.js';
+import { startChain, cancelChain, resumeChain, describeChain, isChainId, chainStatus, chainFeed,
+  chainSummary } from './chain.js';
+import { knownChains, resolveChain, checkChain, userChainDir, userChains } from './chains.js';
 import { resolveTentacle, knownNames, userDir, userTentacles } from './tentacles.js';
 import { startRun, describe, sessionSummary, clip, agentReport, runFeed, runSummary } from './runs.js';
 
 const INSTRUCTIONS = `Kraken delegates work to other headless coding agents. Each action is a "tentacle"; you are the head
 (the agent the developer talks to) that sends work to them.
 Runs are asynchronous: every start tool returns a run_id at once. Then call status(run_id, wait_seconds: 50, since: 0),
-and on each later call pass the cursor it returned as since. While a run or pipeline is in progress, status returns a
+and on each later call pass the cursor it returned as since. While a run or chain is in progress, status returns a
 summary plus new feed lines. Show the developer: (1) summary.headline as-is; (2) one or two short lines written for a
 human, "So far: …" from stage/milestones/tools and "Now: …" from last_line or question, never inventing progress that
 is not in summary; (3) the feed lines as they are in a code block, one per line, nothing added. Then call status again.
-When status is "waiting", ask the developer the question and resume. Do not poll faster.
+Do not poll faster.
 
-Feature flow:
-1. Discuss the feature with the developer yourself; you are the one who advises them.
-2. For hard logic (multi-system changes, state/timing/concurrency/networking/persistence, correctness
-   arguments, or after a failed attempt) call think. Never for simple edits: it is slow and expensive.
-   Relay its recommendation in your own words and ask the developer its open questions.
-3. plan(task + the developer's answers, context_runs: [think run_id]).
-4. execute(plan_id). It works on branch kraken/<run_id> in a separate worktree.
-5. review(run_id) before merging. The result starts with VERDICT: approve | changes_requested.
-6. merge(run_id) returns a preview. Show it to the developer and call merge(run_id, confirm) only after
-   they explicitly approve. (If the developer chose approval mode "auto", merge merges at once when the review
-   approved and verify passed; it says so with auto: true. Tell the developer it landed.)
-   To fix things on the same branch use resume(run_id, instruction);
-   to throw the work away use discard(run_id), also only with the developer's approval.
+After every finished run or chain, follow its \`next\`:
+- "ask: …" show the result, suggest exactly that step, then stop and wait for the developer.
+- "auto: …" the developer allowed this step without asking (the tentacle's autonomy is auto): take it.
+- "stop: …" report to the developer and wait.
 
-Shortcut: pipeline(task, verify) runs plan -> execute -> review (and fix rounds on changes_requested) by
-itself and stops before merge; poll it with status(pipeline_id) like a run.
+Usual order (not a script): discuss the feature with the developer yourself; you are the one who advises them.
+think only for hard logic (multi-system changes, state/timing/concurrency/networking/persistence, correctness
+arguments, or after a failed attempt), never for simple edits: it is slow and expensive; relay its recommendation in
+your own words and ask its open questions. Then plan(task + the developer's answers, context_runs: [think run_id]),
+execute(plan_id) (on branch kraken/<run_id> in a separate worktree), review(run_id) (VERDICT: approve |
+changes_requested), then merge. To fix things on the same branch use resume(run_id, instruction).
+merge(run_id) returns a preview. Show it to the developer and call merge(run_id, confirm) only after
+they explicitly approve. If merge reports auto: true it already landed (the review tentacle's autonomy is auto); tell the developer.
+discard(run_id) throws the work away: only with the developer's approval, always.
 If merge reports conflicts (or its preview predicts them), call update(run_id): it merges the current branch
 into the run's branch and, on conflicts, resumes the agent to resolve them.
+
+Chains: chain(task, verify?) runs the developer's configured stage list (default: plan -> execute -> review, with fix
+rounds), pausing after each stage whose autonomy is ask; chain(name: …) runs another (tentacles() lists them). A chain
+that is "waiting" with a pause continues with resume(chain_id, their reply); one waiting on a question is answered
+through its stage run.
+
+Session override: if the developer explicitly tells you to work in auto for this session, treat every "ask:" next as
+"auto:" until they say otherwise. It never covers questions, "stop:", verify_failed, discard or merge blockers:
+confirm a merge only when auto_merge_blocked_by is empty.
 
 If status is "waiting", the agent asked a question only the developer can answer: ask them, then call
 resume(run_id, their reply). A run stopped as "over_budget" hit its max_cost_usd / max_tokens.
@@ -56,7 +63,7 @@ For questions that need current information from the web (APIs, versions, librar
 run(tentacle: "research", input: question) instead of answering from memory.
 When a think, plan, review, explain or research run finishes, give the developer its result_file path so they can read
 the full text (or tell them: krakenmcp show <run_id>).
-Settings are the developer's: they change them by editing tentacle files in ~/.kraken/tentacles/.`;
+Settings are the developer's: tentacle files in ~/.kraken/tentacles/ and chain files in ~/.kraken/chains/.`;
 
 const SESSION = str({ default: 'default', description: 'Run group label' });
 const CWD = str({ description: 'Repository path' });
@@ -130,18 +137,18 @@ server.tool('run', {
 // ---- follow a run ----
 
 server.tool('status', {
-  description: 'A run\'s or pipeline\'s status, progress, metrics and result. Blocks up to wait_seconds while it is ' +
+  description: 'A run\'s or chain\'s status, progress, metrics and result. Blocks up to wait_seconds while it is ' +
     'in progress (sends progress notifications when the client asks for them).',
-  input: { run_id: str({ required: true, description: 'Run id or pipeline id' }),
+  input: { run_id: str({ required: true, description: 'Run id or chain id' }),
     wait_seconds: num({ min: 0, max: 55, default: 0 }), full: bool({ default: false, description: 'Full result instead of an excerpt' }),
     since: int({ min: 0, description: 'Cursor from the previous status: returns only newer progress lines as feed' }) },
 }, async ({ run_id, wait_seconds, full, since }, { progress }) => {
   pump(); // also recovers runs whose worker died, and starts queued runs if there is room
-  const pipe = isPipelineId(run_id);
-  const load = () => (pipe ? getPipeline(run_id) : getRun(run_id));
-  const busy = (x) => (pipe ? pipelineStatus(x) === 'running' : IN_PROGRESS.includes(x.status));
+  const pipe = isChainId(run_id);
+  const load = () => (pipe ? getChain(run_id) : getRun(run_id));
+  const busy = (x) => (pipe ? chainStatus(x) === 'running' : IN_PROGRESS.includes(x.status));
   let item = load();
-  if (!item) return fail(`no ${pipe ? 'pipeline' : 'run'} ${run_id}`);
+  if (!item) return fail(`no ${pipe ? 'chain' : 'run'} ${run_id}`);
   const started = Date.now(), deadline = started + wait_seconds * 1000;
   let lastKey = null;
   while (busy(item) && Date.now() < deadline) {
@@ -156,26 +163,26 @@ server.tool('status', {
       }
     }
   }
-  const sum = pipe ? pipelineSummary(item) : runSummary(item);
+  const sum = pipe ? chainSummary(item) : runSummary(item);
   if (since === undefined) {
-    return text(pipe ? { ...describePipeline(item, full), summary: sum }
+    return text(pipe ? { ...describeChain(item, full), summary: sum }
       : { ...describe(item, full), summary: sum });
   }
-  const live = pipe ? pipelineFeed(item, since, !busy(item)) : runFeed(item, since, !busy(item));
+  const live = pipe ? chainFeed(item, since, !busy(item)) : runFeed(item, since, !busy(item));
   if (busy(item)) { // compact reply: only what the head shows to the developer
     return text({ id: item.id, status: sum.status, stage: sum.stage, elapsed_s: sum.elapsed_s, cost_usd: sum.cost_usd,
       summary: sum, feed: live.feed, cursor: live.cursor,
       next: `show summary.headline as-is, then one or two short lines for the developer ("So far: …" from stage/milestones/tools and "Now: …" from last_line or question), then the feed lines as they are; call status again with since: ${live.cursor}` });
   }
-  return text(pipe ? { ...describePipeline(item, full, live), summary: sum }
+  return text(pipe ? { ...describeChain(item, full, live), summary: sum }
     : { ...describe(item, full), ...live, summary: sum });
 });
 
-// The live summary of a run or pipeline, for progress notifications (key = headline without time).
-function progressNote(runId, stage, pipelineId) {
-  if (pipelineId) {
-    const p = getPipeline(pipelineId);
-    return p ? pipelineSummary(p) : null;
+// The live summary of a run or chain, for progress notifications (key = headline without time).
+function progressNote(runId, stage, chainId) {
+  if (chainId) {
+    const c = getChain(chainId);
+    return c ? chainSummary(c) : null;
   }
   const run = runId ? getRun(runId) : null;
   return run ? runSummary(run, stage) : null;
@@ -183,14 +190,16 @@ function progressNote(runId, stage, pipelineId) {
 
 server.tool('resume', {
   description: 'Continue a run in its own agent session and branch, as a new run id. On a "waiting" run, input is ' +
-    'the developer\'s answer to its question; on a finished run, a follow-up instruction.',
+    'the developer\'s answer to its question; on a finished run, a follow-up instruction; on a paused chain, the ' +
+    'developer\'s reply (the chain continues).',
   input: { run_id: RUN_ID, input: str({ required: true }) },
-}, async ({ run_id, input }) => attempt(() => resumeRun(run_id, input, { answering: getRun(run_id)?.status === 'waiting' })));
+}, async ({ run_id, input }) => attempt(() => (isChainId(run_id) ? resumeChain(run_id, input)
+  : resumeRun(run_id, input, { answering: getRun(run_id)?.status === 'waiting' }))));
 
 server.tool('cancel', {
-  description: 'Stop a queued or running run.',
+  description: 'Stop a queued or running run, or a chain.',
   input: { run_id: RUN_ID },
-}, async ({ run_id }) => attempt(() => (isPipelineId(run_id) ? cancelPipeline(run_id) : cancelRun(run_id))));
+}, async ({ run_id }) => attempt(() => (isChainId(run_id) ? cancelChain(run_id) : cancelRun(run_id))));
 
 server.tool('update', {
   description: 'Merge the current branch into a run\'s branch (when it is behind or merge conflicts). On conflicts ' +
@@ -198,16 +207,18 @@ server.tool('update', {
   input: { run_id: RUN_ID, resolve: bool({ default: true }) },
 }, async ({ run_id, resolve: res }) => attempt(() => syncBranch(run_id, { resolve: res })));
 
-const STAGE = obj(OVERRIDES);
-server.tool('pipeline', {
-  description: 'Run plan -> execute -> review by itself, with fix rounds when review requests changes or verify ' +
-    'fails. Stops before merge. Returns a pipeline_id for status / cancel.',
-  input: { task: str({ required: true, description: 'Include the developer\'s answers to open questions' }),
+server.tool('chain', {
+  description: 'Run a chain of tentacle stages (default: plan -> execute -> review, with fix rounds). Each stage\'s ' +
+    'autonomy decides whether it continues or waits for the developer. Returns a chain_id for status, resume and cancel.',
+  input: { name: str({ description: 'Chain name (default "default")' }),
+    task: str({ required: true, description: 'Include the developer\'s answers to open questions' }),
     verify: str({ description: 'Command to run after each write step, e.g. "npm test"' }),
-    max_fix_rounds: int({ min: 0, max: 5, default: 1 }), context_runs: CONTEXT_RUNS, cwd: CWD,
-    plan: STAGE, execute: STAGE, review: STAGE, session: SESSION },
-}, async ({ task, verify, max_fix_rounds, context_runs, cwd, plan, execute, review, session }) => attempt(() =>
-  startPipeline({ task, verify, max_fix_rounds, context_runs, cwd, session, overrides: { plan, execute, review } })));
+    max_fix_rounds: int({ min: 0, max: 5 }), context_runs: CONTEXT_RUNS, cwd: CWD,
+    overrides: list(obj({ stage: str({ required: true, description: 'Tentacle name of the stage' }), ...OVERRIDES }),
+      { maxItems: 8 }),
+    session: SESSION },
+}, async ({ name, task, verify, max_fix_rounds, context_runs, cwd, overrides, session }) => attempt(() =>
+  startChain({ name, task, verify, max_fix_rounds, context_runs, cwd, session, overrides })));
 
 server.tool('merge', {
   description: 'Without confirm: a preview and confirm_token. With confirm: merge the run\'s branch into the ' +
@@ -222,7 +233,7 @@ server.tool('discard', {
 
 server.tool('session', {
   description: 'A session at a glance: what needs attention (running, waiting, ready to merge), recent runs and ' +
-    'pipelines, and totals per tentacle/agent/model (outcomes, tokens, cost, duration, tool calls, diff size).',
+    'chains, and totals per tentacle/agent/model (outcomes, tokens, cost, duration, tool calls, diff size).',
   input: { session: SESSION },
 }, async ({ session }) => text(sessionSummary(session)));
 
@@ -230,7 +241,7 @@ server.tool('session', {
 
 server.tool('tentacles', {
   description: 'Tentacles in this repo with resolved settings and where each comes from; installed agents and the ' +
-    'tentacles that need them; limits.',
+    'tentacles that need them; chains; limits.',
   input: { cwd: CWD, show_prompts: bool({ default: false }),
     check_agents: bool({ default: false, description: 'Also run each agent\'s --version (slower)' }) },
 }, async ({ cwd, show_prompts, check_agents }) => {
@@ -244,11 +255,21 @@ server.tool('tentacles', {
     } catch (e) { return { name: n, error: e.message }; }
   });
   const agents = agentReport(dir, check_agents ? checkAgents : agentInfo);
-  return text({ repo: list[0]?.repo, tentacles: list, agents: agents.agents,
+  const chains = knownChains().map((n) => {
+    try {
+      const c = resolveChain(n), k = checkChain(c, dir);
+      return { name: n, builtin: c.builtin, description: c.description, user_file: c.user_file,
+        max_fix_rounds: c.max_fix_rounds,
+        stages: k.stages.map((s) => ({ tentacle: s.tentacle, kind: s.kind, autonomy: s.autonomy, autonomy_source: s.autonomy_source })),
+        problems: k.problems.length ? k.problems : undefined };
+    } catch (e) { return { name: n, error: e.message }; }
+  });
+  const chainProblems = userChains().problems;
+  return text({ repo: list[0]?.repo, tentacles: list, chains, agents: agents.agents,
     agent_problems: agents.problems.length ? agents.problems : undefined,
-    limits: { max_parallel: maxParallel(),
-      approval_mode: approvalMode() },
-    user_files: { dir: userDir(), problems: userTentacles().problems.length ? userTentacles().problems : undefined } });
+    limits: { max_parallel: maxParallel() },
+    user_files: { dir: userDir(), problems: userTentacles().problems.length ? userTentacles().problems : undefined },
+    chain_files: { dir: userChainDir(), problems: chainProblems.length ? chainProblems : undefined } });
 });
 
 server.start();

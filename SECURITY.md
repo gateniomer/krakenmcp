@@ -23,11 +23,13 @@ using it on code you care about.
 - **`merge` changes your checkout** but only with the `confirm_token` from a preview.
   The tool tells the calling model to get your approval first; Kraken cannot verify
   that a human approved it.
-- **`krakenmcp mode auto` merges without asking** when the latest review approves, `verify`
-  passed, nothing conflicts and neither checkout has uncommitted changes. Only the CLI can turn
-  it on. The `verify` command must come from your settings: one the head passed in the call
-  (`execute` / `pipeline` take `verify`) does not count. A reviewer is a model, so auto mode
-  trusts its verdict and your `verify` command.
+- **Review `autonomy: auto` merges without asking** when the latest review approves, `verify`
+  passed, nothing conflicts and neither checkout has uncommitted changes. Only your tentacle
+  files can turn it on (a call cannot set `autonomy`). The `verify` command must come from your
+  files: one the head passed in the call (`execute` / `chain` take `verify`) does not count. A
+  reviewer is a model, so this trusts its verdict and your `verify` command. Telling the head to
+  "work in auto this session" is followed by the head only; it cannot get past these checks,
+  because `merge` without `confirm` still only previews unless the review's autonomy is `auto`.
 - **Settings change only through your tentacle files.** MCP clients can override `agent`,
   `model`, `effort`, and for write runs `verify`, for one call, but cannot store
   settings or change prompts.

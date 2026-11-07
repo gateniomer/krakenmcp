@@ -1,6 +1,7 @@
 // Tentacles: named actions (plan, execute, or custom) with layered settings.
 // Tentacles are .md files: built-ins in src/tentacles/, the developer's own in ~/.kraken/tentacles/.
-// Resolution order, last wins: built-in -> user file -> call arguments (agent/model/effort only).
+// Resolution order, last wins: built-in -> user file -> chain stage -> call arguments
+// (agent/model/effort/verify only; a call can never set autonomy).
 // Only the developer changes settings, by editing files; MCP clients can override per call.
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -20,12 +21,15 @@ export const FIELDS = {
   timeout_min: 'number',
   max_cost_usd: 'number|null', // stop the run when its cost passes this (agents that report cost)
   max_tokens: 'number|null',   // stop the run when input + output + reasoning tokens pass this
+  // The step after a successful run: ask = the head suggests it and waits for the developer;
+  // auto = the head (or a chain) may take it without asking. Hard stops always stop.
+  autonomy: ['ask', 'auto'],
 };
 
 // Defaults for every tentacle file; a custom tentacle must set at least `prompt`.
 const CUSTOM_BASE = {
   description: '', access: 'read', agent: 'opencode', model: null, effort: null,
-  verify: null, timeout_min: 30, max_cost_usd: null, max_tokens: null,
+  verify: null, timeout_min: 30, max_cost_usd: null, max_tokens: null, autonomy: 'ask',
 };
 
 // ---- tentacle files: <name>.md with a "---" settings header, then the prompt ----
@@ -41,9 +45,10 @@ const CUSTOM_BASE = {
 export const NAME = /^[a-z][a-z0-9_-]{0,31}$/;
 const headerValue = (v) => { try { return JSON.parse(v); } catch { return v; } };
 
-export function parseTentacleFile(text) {
+// The "---" header (typed values) and the body after it; shared by tentacle and chain files.
+export function parseHeader(text, what = 'the prompt') {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n([\s\S]*))?$/);
-  if (!m) throw new Error('expected a "---" settings header, a closing "---", then the prompt');
+  if (!m) throw new Error(`expected a "---" settings header, a closing "---", then ${what}`);
   const settings = {};
   for (const line of m[1].split(/\r?\n/)) {
     if (!line.trim() || line.trimStart().startsWith('#')) continue;
@@ -51,8 +56,12 @@ export function parseTentacleFile(text) {
     if (i < 1) throw new Error(`bad header line "${line}" (expected key: value)`);
     settings[line.slice(0, i).trim()] = headerValue(line.slice(i + 1).trim());
   }
+  return { settings, body: (m[2] ?? '').trim() };
+}
+
+export function parseTentacleFile(text) {
+  const { settings, body: prompt } = parseHeader(text);
   if ('prompt' in settings) throw new Error('the prompt goes after the header, not in it');
-  const prompt = (m[2] ?? '').trim();
   if (prompt) settings.prompt = prompt;
   validate(settings);
   return settings;
@@ -115,7 +124,7 @@ export function repoRoot(cwd) {
   catch { return dir; }
 }
 
-function validate(settings) {
+export function validate(settings) {
   for (const [k, v] of Object.entries(settings)) {
     const spec = FIELDS[k];
     if (!spec) throw new Error(`Unknown field "${k}". Fields: ${Object.keys(FIELDS).join(', ')}`);
@@ -147,7 +156,8 @@ export function knownNames(cwd) {
   return [...new Set([...order, ...Object.keys(BUILTIN), ...Object.keys(userTentacles().tentacles)])];
 }
 
-export function resolveTentacle(name, cwd, overrides = {}) {
+// layers: extra { label, values } applied after the user file and before the call (chain stages).
+export function resolveTentacle(name, cwd, overrides = {}, layers = []) {
   const root = repoRoot(cwd);
   const builtin = BUILTIN[name];
   const userLayer = userTentacles().tentacles[name];
@@ -157,7 +167,13 @@ export function resolveTentacle(name, cwd, overrides = {}) {
   const merged = {}, sources = {};
   apply(merged, sources, builtin ?? CUSTOM_BASE, builtin ? 'built-in' : 'custom default');
   apply(merged, sources, userLayer, 'user file');
-  const call = Object.fromEntries(Object.entries(overrides).filter(([, v]) => v !== undefined));
+  for (const { label, values } of layers) {
+    const layer = Object.fromEntries(Object.entries(values ?? {}).filter(([, v]) => v !== undefined));
+    validate(layer);
+    apply(merged, sources, layer, label);
+  }
+  // autonomy is the developer's: a call cannot set it.
+  const call = Object.fromEntries(Object.entries(overrides).filter(([k, v]) => v !== undefined && k !== 'autonomy'));
   validate(call);
   apply(merged, sources, call, 'call');
 
@@ -167,12 +183,15 @@ export function resolveTentacle(name, cwd, overrides = {}) {
     sources.model = `${sources.model ?? 'built-in'} → agent default`;
   }
   return {
-    name, repo: root, builtin: !!builtin, settings: merged, sources,
+    name, repo: root, builtin: !!builtin, settings: merged, sources, autonomy: merged.autonomy,
     user_file: userLayer ? join(userDir(), `${name}.md`) : undefined,
     needs_plan: merged.prompt.includes('{{plan}}'),
     needs_diff: merged.prompt.includes('{{diff}}'),
   };
 }
+
+// What a tentacle does in a chain: review (reads a diff), write (works on a branch), or read.
+export const stageKind = (t) => (t.needs_diff ? 'review' : t.settings.access === 'write' ? 'write' : 'read');
 
 // vars.context: results of earlier runs (e.g. a think run fed into plan). Goes where the template
 // puts {{context}}, or is appended at the end when the template does not mention it.

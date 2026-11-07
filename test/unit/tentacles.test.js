@@ -116,3 +116,24 @@ test('a user tentacle file can override only some fields; bad file names are rep
   assert.match(T.userTentacles().problems[0], /file name must be/);
   rmSync(dir, { recursive: true });
 });
+
+test('autonomy: defaults to ask, a user file or chain layer sets it, a call cannot', () => {
+  assert.deepEqual([T.resolveTentacle('think', repo).autonomy, T.resolveTentacle('think', repo).sources.autonomy], ['ask', 'built-in']);
+  file('lint', '---\ndescription: lint\n---\nLint {{task}}');
+  assert.deepEqual([T.resolveTentacle('lint', repo).autonomy, T.resolveTentacle('lint', repo).sources.autonomy], ['ask', 'custom default']);
+  file('plan', '---\nautonomy: auto\n---\n');
+  const p = T.resolveTentacle('plan', repo);
+  assert.deepEqual([p.autonomy, p.sources.autonomy], ['auto', 'user file']);
+  const c = T.resolveTentacle('plan', repo, {}, [{ label: 'chain x', values: { autonomy: 'ask' } }]);
+  assert.deepEqual([c.autonomy, c.sources.autonomy], ['ask', 'chain x']);
+  assert.equal(T.resolveTentacle('think', repo, { autonomy: 'auto' }).autonomy, 'ask', 'a call never sets autonomy');
+  assert.throws(() => T.resolveTentacle('think', repo, {}, [{ label: 'chain x', values: { autonomy: 'maybe' } }]), /autonomy must be one of ask, auto/);
+  file('plan', null); file('lint', null);
+  assert.match(T.tentacleTemplate('plan'), /# autonomy: ask/);
+});
+
+test('stageKind: review reads a diff, write works on a branch, everything else reads', () => {
+  assert.equal(T.stageKind(T.resolveTentacle('review', repo)), 'review');
+  assert.equal(T.stageKind(T.resolveTentacle('execute', repo)), 'write');
+  assert.equal(T.stageKind(T.resolveTentacle('plan', repo)), 'read');
+});

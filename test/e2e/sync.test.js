@@ -133,12 +133,12 @@ test('a database from an older version gets the new columns on first use', () =>
   const first = { ...h.env, KRAKEN_DATA: data };
   execFileSync(process.execPath, [new URL('../../src/bin.js', import.meta.url).pathname, 'limit'], { env: first });
   const db = new DatabaseSync(join(data, 'kraken.db'));
-  for (const c of ['cancel_requested', 'stop_reason', 'pipeline_id']) db.exec(`ALTER TABLE runs DROP COLUMN ${c}`);
+  for (const c of ['cancel_requested', 'stop_reason', 'chain_id', 'chain_stage']) db.exec(`ALTER TABLE runs DROP COLUMN ${c}`);
   db.close();
   execFileSync(process.execPath, [new URL('../../src/bin.js', import.meta.url).pathname, 'limit'], { env: first });
   const again = new DatabaseSync(join(data, 'kraken.db'));
   const cols = again.prepare('PRAGMA table_info(runs)').all().map((c) => c.name);
   again.close();
-  for (const c of ['cancel_requested', 'stop_reason', 'pipeline_id']) assert.ok(cols.includes(c), c);
+  for (const c of ['cancel_requested', 'stop_reason', 'chain_id', 'chain_stage']) assert.ok(cols.includes(c), c);
   rmSync(data, { recursive: true, force: true });
 });

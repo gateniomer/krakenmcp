@@ -1,5 +1,5 @@
 // Scheduling: at most max_parallel runs at once (the rest wait as 'queued'), and recovery of runs
-// whose worker died. Workers and pipeline drivers are detached node processes.
+// whose worker died. Workers and chain drivers are detached node processes.
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { ROOT, db, getRun, updateRun, addMessage, nowIso, getSetting } from './store.js';
@@ -26,11 +26,11 @@ export function reapStale() {
   // Claimed by the scheduler but the worker never started (spawn failed): put back in the queue.
   const stale = new Date(Date.now() - 60_000).toISOString();
   db.prepare("UPDATE runs SET pid = NULL, claimed_at = NULL WHERE status = 'queued' AND pid = -1 AND claimed_at < ?").run(stale);
-  // Pipelines whose driver died.
-  for (const p of db.prepare("SELECT id, pid FROM pipelines WHERE status IN ('running', 'waiting')").all()) {
+  // Chains whose driver died. A paused chain has no driver (pid null) and is left alone.
+  for (const p of db.prepare("SELECT id, pid FROM chains WHERE status IN ('running', 'waiting')").all()) {
     if (p.pid > 0 && !alive(p.pid)) {
-      db.prepare("UPDATE pipelines SET status = 'failed', error = ?, finished_at = ? WHERE id = ?")
-        .run('the pipeline driver exited unexpectedly (crash or restart); its runs are kept', nowIso(), p.id);
+      db.prepare("UPDATE chains SET status = 'failed', error = ?, finished_at = ? WHERE id = ?")
+        .run('the chain driver exited unexpectedly (crash or restart); its runs are kept', nowIso(), p.id);
     }
   }
   return reaped;
