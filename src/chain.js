@@ -8,7 +8,6 @@
 // autonomy decides merging: auto merges an approved, verified branch when nothing blocks it;
 // otherwise the chain ends and the head shows the merge preview. A question from any stage pauses
 // the chain as "waiting" without a pause: the head answers that run and the chain follows it.
-import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { newId, nowIso, getRun, insertChain, getChain, updateChain, resumedBy, IN_PROGRESS, latestReview,
@@ -21,10 +20,11 @@ import { resolveChain, checkChain } from './chains.js';
 import { startRun, describe, runLabel, renderFeed, STOP_NEXT, headline, toolCounts, finishedNext, runFacts,
   currentActivity, lastAgentText, modelOf, statusText, timeLine } from './runs.js';
 import { box } from './card.js';
+import { isGitRepo } from './git.js';
+import { parseJson as json, elapsedMs } from './util.js';
 
 export const isChainId = (id) => typeof id === 'string' && id.startsWith('chain_');
 const FINAL = ['done', 'failed', 'cancelled'];
-const json = (s, fallback) => { try { return s ? JSON.parse(s) : fallback; } catch { return fallback; } };
 
 // overrides: [{ stage: <tentacle>, agent?, model?, effort? }] for this call only.
 export function startChain({ name = 'default', task, cwd, session = 'default', verify, max_fix_rounds,
@@ -40,8 +40,7 @@ export function startChain({ name = 'default', task, cwd, session = 'default', v
   }
   if (verify && !checked.has_write) throw new Error(`chain ${name} has no write stage, so verify does not apply`);
   if (checked.has_write) {
-    try { execFileSync('git', ['-C', dir, 'rev-parse', '--is-inside-work-tree'], { stdio: 'ignore' }); }
-    catch { throw new Error(`${dir} is not a git repo; chain ${name}'s write stage needs a worktree`); }
+    if (!isGitRepo(dir)) throw new Error(`${dir} is not a git repo; chain ${name}'s write stage needs a worktree`);
   }
   for (const cid of context_runs) {
     const r = getRun(cid);
@@ -144,8 +143,7 @@ export function chainSummary(c) {
   const cur = c.current_run ? getRun(c.current_run) : null;
   const tools = toolCounts(chainToolMessages(c.id));
   const rows = cur ? recentMessages(cur.id, 50) : [];
-  const dateOf = (s) => new Date(s.includes('T') ? s : `${s.replace(' ', 'T')}Z`);
-  const elapsed = c.created_at ? (c.finished_at ? dateOf(c.finished_at) : new Date()) - dateOf(c.created_at) : undefined;
+  const elapsed = elapsedMs(c.created_at, c.finished_at);
   const cost = chainRuns(c.id).reduce((a, r) => a + (r.cost_usd ?? 0), 0) || undefined;
   const opts = json(c.options, {});
   const write = c.write_run ? getRun(c.write_run) : null;
@@ -213,7 +211,7 @@ export function describeChain(c, full = false, live) {
     current: cur ? describeBrief(cur, full) : undefined,
     question: status === 'waiting' && !pause ? cur?.question : undefined,
     pause: pause ?? undefined,
-    result: c.result ? JSON.parse(c.result) : undefined,
+    result: json(c.result),
     error: c.error ?? undefined,
     ...live,
     cursor: live?.cursor ?? lastChainMessageId(c.id),
@@ -238,8 +236,7 @@ export function chainCard(c) {
   const cur = c.current_run ? getRun(c.current_run) : null;
   const rows = cur ? recentMessages(cur.id, 50) : [];
   const opts = json(c.options, {});
-  const dateOf = (x) => new Date(x.includes('T') ? x : `${x.replace(' ', 'T')}Z`);
-  const elapsed = c.created_at ? (c.finished_at ? dateOf(c.finished_at) : new Date()) - dateOf(c.created_at) : undefined;
+  const elapsed = elapsedMs(c.created_at, c.finished_at);
   const cost = chainRuns(c.id).reduce((a, r) => a + (r.cost_usd ?? 0), 0);
   const tools = toolCounts(chainToolMessages(c.id));
   const result = json(c.result, null);

@@ -8,19 +8,13 @@ import {
   messagesSinceAll, lastMessageId, allRuns, latestReview, listRuns, listChains, toolMessages, resumedBy, db,
 } from './store.js';
 import { pump, queueInfo } from './scheduler.js';
-import { reviewInput, gitIn } from './branches.js';
+import { reviewInput } from './branches.js';
+import { gitIn, isGitRepo } from './git.js';
+import { parseJson as parse, toDate } from './util.js';
 import { resolveTentacle, renderPrompt, formatContext, knownNames, stageKind } from './tentacles.js';
 import { box, tildify } from './card.js';
 
-export function isGitRepo(dir) {
-  try { execFileSync('git', ['-C', dir, 'rev-parse', '--is-inside-work-tree'], { stdio: 'ignore' }); return true; }
-  catch { return false; }
-}
-
 export const clip = (s, n = 1500) => (s && s.length > n ? `${s.slice(0, n)}\n…[truncated, ${s.length} chars]` : s);
-const parse = (s) => (s ? JSON.parse(s) : undefined);
-// Older rows used SQLite datetime('now') ("YYYY-MM-DD HH:MM:SS", UTC without a zone marker).
-const toDate = (s) => new Date(s.includes('T') ? s : `${s.replace(' ', 'T')}Z`);
 const ms = (a, b) => (a && b ? toDate(b) - toDate(a) : undefined);
 
 // Metrics an agent's output does not contain, so they read "not reported" instead of zero.

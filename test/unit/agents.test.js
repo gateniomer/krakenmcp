@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AGENTS, which } from '../../src/agents.js';
+import { AGENTS } from '../../src/agents.js';
+import { which } from '../../src/platform.js';
 
 const { opencode, claude, codex } = AGENTS;
 

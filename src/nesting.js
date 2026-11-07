@@ -7,8 +7,6 @@
 import { db } from './store.js';
 import { ancestors } from './platform.js';
 
-export { ancestors };
-
 // Returns the id of the Kraken run this process is nested in, or null.
 export function nestedRun({ env = process.env, chain = ancestors() } = {}) {
   if (env.KRAKEN_PARENT_RUN) return env.KRAKEN_PARENT_RUN;

@@ -6,7 +6,8 @@ import { renderResumePrompt } from './tentacles.js';
 import { IN_PROGRESS, newId, insertRun, getRun, updateRun, addMessage, nowIso } from './store.js';
 import { alive, killTree } from './platform.js';
 import { pump, queueInfo } from './scheduler.js';
-import { ensureWorktree, tryGit } from './branches.js';
+import { ensureWorktree, tryGit } from './git.js';
+import { parseJson } from './util.js';
 import { startCard } from './runs.js';
 
 export function mustRun(id) {
@@ -80,5 +81,5 @@ export function resumeRun(id, input, { session, answering = false, syncBase, mer
   };
 }
 
-const prevLimits = (run) => { try { return JSON.parse(run.config)?.limits; } catch { return undefined; } };
-const prevNeedsDiff = (run) => { try { return !!JSON.parse(run.config)?.needs_diff; } catch { return false; } };
+const prevLimits = (run) => parseJson(run.config, {}).limits;
+const prevNeedsDiff = (run) => !!parseJson(run.config, {}).needs_diff;

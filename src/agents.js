@@ -19,8 +19,6 @@ import codex from './agents/codex.js';
 import cursor from './agents/cursor.js';
 import aider from './agents/aider.js';
 
-export { which };
-
 // To add an agent: write src/agents/<name>.js (see the contract above) and list it here.
 export const AGENTS = { opencode, claude, codex, cursor, aider };
 

@@ -3,12 +3,12 @@
 // Resolution order, last wins: built-in -> user file -> chain stage -> call arguments
 // (agent/model/effort/verify only; a call can never set autonomy).
 // Only the developer changes settings, by editing files; MCP clients can override per call.
-import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join, resolve as resolvePath } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGENTS } from './agents.js';
 import { DATA_DIR } from './store.js';
+import { repoRoot } from './git.js';
 
 export const FIELDS = {
   description: 'string',
@@ -117,12 +117,6 @@ const PREAMBLE = {
 const ASK = 'You are a Kraken sub-agent: do this task yourself. Do not call Kraken tools or delegate to other agents. ' +
   'If you cannot continue without a decision only the developer can make, stop and make the last line ' +
   'of your final message exactly: KRAKEN_QUESTION: <your question>. You will be resumed with the answer.';
-
-export function repoRoot(cwd) {
-  const dir = resolvePath(cwd);
-  try { return execFileSync('git', ['-C', dir, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
-  catch { return dir; }
-}
 
 export function validate(settings) {
   for (const [k, v] of Object.entries(settings)) {

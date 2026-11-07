@@ -7,6 +7,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
+import { pageAll } from './util.js';
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const VERSION = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
@@ -171,24 +172,8 @@ export const chainMessagesSince = (pid, since = 0, limit = 200) =>
   db.prepare(`SELECT m.id, m.run_id, m.sender, m.kind, m.body FROM messages m JOIN runs r ON r.id = m.run_id
               WHERE r.chain_id = ? AND m.id > ? ORDER BY m.id LIMIT ?`).all(pid, since, limit);
 // Read every row after `since` (page by page), for the final reply: nothing may be dropped.
-export const messagesSinceAll = (runId, since = 0) => {
-  const out = [];
-  for (let after = since;;) {
-    const rows = messagesSince(runId, after);
-    out.push(...rows);
-    if (rows.length < 200) return out;
-    after = rows.at(-1).id;
-  }
-};
-export const chainMessagesSinceAll = (pid, since = 0) => {
-  const out = [];
-  for (let after = since;;) {
-    const rows = chainMessagesSince(pid, after);
-    out.push(...rows);
-    if (rows.length < 200) return out;
-    after = rows.at(-1).id;
-  }
-};
+export const messagesSinceAll = (runId, since = 0) => pageAll((after) => messagesSince(runId, after), since);
+export const chainMessagesSinceAll = (cid, since = 0) => pageAll((after) => chainMessagesSince(cid, after), since);
 export const lastMessageId = (runId) =>
   db.prepare('SELECT MAX(id) AS id FROM messages WHERE run_id = ?').get(runId)?.id ?? 0;
 export const lastChainMessageId = (pid) =>

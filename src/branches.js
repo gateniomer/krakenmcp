@@ -5,10 +5,8 @@ import { existsSync } from 'node:fs';
 import { db, IN_PROGRESS, getRun, addMessage, latestReview } from './store.js';
 import { resolveTentacle } from './tentacles.js';
 import { mustRun, resumeRun } from './control.js';
-
-export const gitIn = (dir, ...args) =>
-  execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-export const tryGit = (dir, ...args) => { try { return gitIn(dir, ...args); } catch { return null; } };
+import { gitIn, tryGit, ensureWorktree } from './git.js';
+import { parseJson } from './util.js';
 
 // ---- discard / merge (write runs with a kraken/<run_id> branch) ----
 
@@ -18,17 +16,6 @@ function branchRun(id) {
   if (run.outcome) throw new Error(`${id} was already ${run.outcome}`);
   if (IN_PROGRESS.includes(run.status)) throw new Error(`${id} is still ${run.status}; cancel it first`);
   return run;
-}
-
-// The worktree folder was deleted by hand (or by a cleanup tool) but the branch is still there:
-// put the worktree back so the run can be resumed, updated or reviewed.
-export function ensureWorktree(run) {
-  if (!run.branch || existsSync(run.workdir)) return false;
-  if (!tryGit(run.cwd, 'rev-parse', '--verify', '--quiet', run.branch)) throw new Error(`branch ${run.branch} no longer exists`);
-  tryGit(run.cwd, 'worktree', 'prune');
-  gitIn(run.cwd, 'worktree', 'add', run.workdir, run.branch);
-  addMessage({ session: run.session, run_id: run.id, sender: 'kraken', kind: 'progress', body: `recreated missing worktree ${run.workdir}` });
-  return true;
 }
 
 // Files that would conflict if `branch` were merged into `into`, without touching any checkout
@@ -78,7 +65,7 @@ export function reviewAutonomy(run) {
 // Where the branch's verify command came from: the first run on the branch resolved it.
 const verifySource = (run) => {
   const first = db.prepare('SELECT config FROM runs WHERE branch = ? ORDER BY created_at LIMIT 1').get(run.branch);
-  try { return JSON.parse(first?.config ?? '{}').sources?.verify; } catch { return undefined; }
+  return parseJson(first?.config, {}).sources?.verify;
 };
 
 // Why a branch may not merge without a preview. Empty: approved, verified, clean.

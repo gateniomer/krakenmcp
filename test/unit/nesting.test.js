@@ -7,7 +7,8 @@ import { join } from 'node:path';
 
 process.env.KRAKEN_DATA = mkdtempSync(join(tmpdir(), 'kraken-nest-'));
 delete process.env.KRAKEN_PARENT_RUN;
-const { nestedRun, ancestors } = await import('../../src/nesting.js');
+const { nestedRun } = await import('../../src/nesting.js');
+const { ancestors } = await import('../../src/platform.js');
 const { insertRun, updateRun } = await import('../../src/store.js');
 
 insertRun({ id: 'run_a', session: 's', tentacle: 'plan', access: 'read', task: 't', agent: 'opencode', prompt: 'p',

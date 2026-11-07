@@ -4,13 +4,15 @@
 //
 // Once a second it checks the database: cancel() sets cancel_requested, and the live cost/tokens are saved and checked against the run's
 // max_cost_usd / max_tokens. Stopping kills the agent's whole process tree.
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createWriteStream, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveAgent } from './agents.js';
 import { db, getRun, updateRun, addMessage, nowIso, PLANS_DIR, LOGS_DIR } from './store.js';
 import { pump } from './scheduler.js';
 import { killTree, runShell } from './platform.js';
+import { gitIn } from './git.js';
+import { parseJson } from './util.js';
 
 const runId = process.argv[2];
 const run = getRun(runId);
@@ -28,7 +30,7 @@ function failEarly(message) {
 }
 let agent;
 try { agent = resolveAgent(run.agent); } catch (e) { failEarly(e.message); }
-const config = run.config ? JSON.parse(run.config) : {};
+const config = parseJson(run.config, {});
 const limits = config.limits ?? {}; // { max_cost_usd, max_tokens } resolved when the run was created
 const lastMessageFile = join(LOGS_DIR, `${runId}.last.txt`);
 // The prompt was rendered when the run was created (see tentacles.js); access maps to the agent's
@@ -72,7 +74,6 @@ function stop(reason, note) {
 }
 const killer = setTimeout(() => stop('timeout', `timeout after ${run.timeout_min} min, stopping agent`),
   (run.timeout_min ?? 30) * 60 * 1000);
-process.on('SIGTERM', () => stop('cancelled', 'cancelled, stopping agent')); // older Kraken versions signal
 
 const usedTokens = (t) => (t ? (t.input || 0) + (t.output || 0) + (t.reasoning || 0) : 0);
 let lastParsedLength = -1;
@@ -93,7 +94,7 @@ function watch() {
 }
 const watcher = setInterval(watch, 1000);
 
-const git = (...a) => execFileSync('git', ['-C', run.workdir, ...a], { encoding: 'utf8' });
+const git = (...a) => gitIn(run.workdir, ...a);
 // Files the agent keeps for itself (e.g. aider's caches) never go into the commit.
 const exclude = (agent.ignore ?? []).map((g) => `:(exclude,glob)${g}`);
 
@@ -141,9 +142,7 @@ child.on('close', (code) => {
   if (!stopReason && p.overBudget) { stopReason = 'over_budget'; stopDetail = `${run.agent} stopped at its --max-budget-usd cap`; }
   const ok = code === 0 && p.text && !stopReason;
   const question = ok ? p.text.match(/^\s*KRAKEN_QUESTION:\s*(.+)$/m)?.[1]?.trim() ?? null : null;
-  let needsDiff = false;
-  try { needsDiff = !!JSON.parse(run.config ?? '{}').needs_diff; } catch { /* unreadable config */ }
-  const verdict = ok && (run.tentacle === 'review' || needsDiff)
+  const verdict = ok && (run.tentacle === 'review' || config.needs_diff)
     ? p.text.match(/VERDICT:\s*\**\s*(approve|changes_requested)/i)?.[1]?.toLowerCase() ?? null : null;
   if (ok && run.access === 'read') writeFileSync(join(PLANS_DIR, `${runId}.md`), p.text + '\n');
 
