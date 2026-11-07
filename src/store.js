@@ -113,11 +113,13 @@ db.exec(`
 // Columns added later: add them to databases created by older versions.
 function addColumns(table, cols) {
   const have = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name));
-  for (const [name, type] of Object.entries(cols)) if (!have.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
+  for (const [name, type] of Object.entries(cols)) if (!have.has(name)) db.exec(`ALTER TABLE ${table} ADD ` +
+    `COLUMN ${name} ${type}`);
 }
 addColumns('runs', {
-  cancel_requested: 'INTEGER NOT NULL DEFAULT 0', // set by cancel(); the worker polls it (portable, no signals)
-  stop_reason: 'TEXT',                            // why Kraken stopped it: budget details
+  // set by cancel(); the worker polls it (portable, no signals)
+  cancel_requested: 'INTEGER NOT NULL DEFAULT 0',
+  stop_reason: 'TEXT', // why Kraken stopped it: budget details
   chain_id: 'TEXT',
   chain_stage: 'INTEGER',
 });
@@ -137,24 +139,25 @@ export const newId = (prefix) =>
 
 // ---- runs ----
 
+const RUN_COLUMNS = ['id', 'session', 'tentacle', 'access', 'plan_id', 'task', 'agent', 'model', 'effort',
+  'prompt', 'config', 'timeout_min', 'cwd', 'workdir', 'branch', 'verify_cmd', 'base_sha', 'resumed_from',
+  'native_session', 'target_run', 'chain_id', 'chain_stage'];
+
 export function insertRun(r) {
-  db.prepare(`INSERT INTO runs (id, session, tentacle, access, plan_id, task, agent, model, effort, prompt, config,
-                timeout_min, cwd, workdir, branch, verify_cmd, base_sha, resumed_from, native_session, target_run,
-                chain_id, chain_stage, created_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(r.id, r.session, r.tentacle, r.access, r.plan_id ?? null, r.task, r.agent, r.model ?? null,
-         r.effort ?? null, r.prompt, r.config ? JSON.stringify(r.config) : null, r.timeout_min ?? null,
-         r.cwd, r.workdir, r.branch ?? null, r.verify_cmd ?? null, r.base_sha ?? null, r.resumed_from ?? null,
-         r.native_session ?? null, r.target_run ?? null, r.chain_id ?? null, r.chain_stage ?? null, nowIso());
+  const row = { ...r, config: r.config ? JSON.stringify(r.config) : null };
+  const values = RUN_COLUMNS.map((c) => row[c] ?? null);
+  db.prepare(`INSERT INTO runs (${RUN_COLUMNS.join(', ')}, created_at)
+              VALUES (${RUN_COLUMNS.map(() => '?').join(',')}, ?)`).run(...values, nowIso());
 }
 
 export const getRun = (id) => db.prepare('SELECT * FROM runs WHERE id = ?').get(id);
 
-export function updateRun(id, fields) {
+const updateRow = (table, id, fields) => {
   const keys = Object.keys(fields);
-  db.prepare(`UPDATE runs SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`)
+  db.prepare(`UPDATE ${table} SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`)
     .run(...keys.map((k) => fields[k]), id);
-}
+};
+export const updateRun = (id, fields) => updateRow('runs', id, fields);
 
 export function addMessage({ session = 'default', run_id = null, sender, kind, body }) {
   db.prepare('INSERT INTO messages (session, run_id, sender, kind, body) VALUES (?,?,?,?,?)')
@@ -162,34 +165,38 @@ export function addMessage({ session = 'default', run_id = null, sender, kind, b
 }
 
 export const recentMessages = (runId, limit = 5) =>
-  db.prepare('SELECT sender, kind, body, created_at FROM messages WHERE run_id = ? ORDER BY id DESC LIMIT ?')
-    .all(runId, limit).reverse();
+  db.prepare(`SELECT sender, kind, body, created_at FROM messages
+              WHERE run_id = ? ORDER BY id DESC LIMIT ?`).all(runId, limit).reverse();
 
 export const messagesSince = (runId, since = 0, limit = 200) =>
-  db.prepare('SELECT id, run_id, sender, kind, body FROM messages WHERE run_id = ? AND id > ? ORDER BY id LIMIT ?')
-    .all(runId, since, limit);
-export const chainMessagesSince = (pid, since = 0, limit = 200) =>
+  db.prepare(`SELECT id, run_id, sender, kind, body FROM messages
+              WHERE run_id = ? AND id > ? ORDER BY id LIMIT ?`).all(runId, since, limit);
+export const chainMessagesSince = (cid, since = 0, limit = 200) =>
   db.prepare(`SELECT m.id, m.run_id, m.sender, m.kind, m.body FROM messages m JOIN runs r ON r.id = m.run_id
-              WHERE r.chain_id = ? AND m.id > ? ORDER BY m.id LIMIT ?`).all(pid, since, limit);
+              WHERE r.chain_id = ? AND m.id > ? ORDER BY m.id LIMIT ?`).all(cid, since, limit);
 // Read every row after `since` (page by page), for the final reply: nothing may be dropped.
 export const messagesSinceAll = (runId, since = 0) => pageAll((after) => messagesSince(runId, after), since);
-export const chainMessagesSinceAll = (cid, since = 0) => pageAll((after) => chainMessagesSince(cid, after), since);
+export const chainMessagesSinceAll = (cid, since = 0) =>
+  pageAll((after) => chainMessagesSince(cid, after), since);
 export const lastMessageId = (runId) =>
   db.prepare('SELECT MAX(id) AS id FROM messages WHERE run_id = ?').get(runId)?.id ?? 0;
-export const lastChainMessageId = (pid) =>
-  db.prepare('SELECT MAX(m.id) AS id FROM messages m JOIN runs r ON r.id = m.run_id WHERE r.chain_id = ?').get(pid)?.id ?? 0;
+export const lastChainMessageId = (cid) =>
+  db.prepare(`SELECT MAX(m.id) AS id FROM messages m JOIN runs r ON r.id = m.run_id
+              WHERE r.chain_id = ?`).get(cid)?.id ?? 0;
 export const chainRuns = (cid) =>
-  db.prepare('SELECT id, tentacle, resumed_from, config, cost_usd, chain_stage, status FROM runs WHERE chain_id = ? ORDER BY created_at, rowid').all(cid);
+  db.prepare(`SELECT id, tentacle, resumed_from, config, cost_usd, chain_stage, status FROM runs
+              WHERE chain_id = ? ORDER BY created_at, rowid`).all(cid);
 // Every tool line of a run (or of all runs of a chain), for the live summary's tool count.
 export const toolMessages = (runId) =>
-  db.prepare("SELECT body FROM messages WHERE run_id = ? AND kind = 'progress' AND body LIKE 'tool: %' ORDER BY id").all(runId);
-export const chainToolMessages = (pid) =>
+  db.prepare(`SELECT body FROM messages
+              WHERE run_id = ? AND kind = 'progress' AND body LIKE 'tool: %' ORDER BY id`).all(runId);
+export const chainToolMessages = (cid) =>
   db.prepare(`SELECT m.body FROM messages m JOIN runs r ON r.id = m.run_id
-              WHERE r.chain_id = ? AND m.kind = 'progress' AND m.body LIKE 'tool: %' ORDER BY m.id`).all(pid);
+              WHERE r.chain_id = ? AND m.kind = 'progress' AND m.body LIKE 'tool: %' ORDER BY m.id`).all(cid);
 
 export const listRuns = (session, limit = 20) =>
-  db.prepare(`SELECT id, tentacle, access, plan_id, agent, model, effort, status, outcome, verdict, duration_ms, cost_usd,
-                substr(task,1,80) AS task, created_at, finished_at
+  db.prepare(`SELECT id, tentacle, access, plan_id, agent, model, effort, status, outcome, verdict,
+                duration_ms, cost_usd, substr(task,1,80) AS task, created_at, finished_at
               FROM runs WHERE session = ? ORDER BY created_at DESC LIMIT ?`).all(session, limit);
 
 export const allRuns = (session) =>
@@ -198,34 +205,38 @@ export const allRuns = (session) =>
 // Latest review of a run (review runs record target_run + verdict).
 export const latestReview = (runId) =>
   db.prepare(`SELECT id, tentacle, status, verdict, agent, model, finished_at FROM runs
-              WHERE target_run = ? AND (tentacle = 'review' OR verdict IS NOT NULL) ORDER BY created_at DESC LIMIT 1`).get(runId);
+              WHERE target_run = ? AND (tentacle = 'review' OR verdict IS NOT NULL)
+              ORDER BY created_at DESC LIMIT 1`).get(runId);
 
 // The run that resumed `id` (answer / resume create a new run with resumed_from = id).
 export const resumedBy = (id) =>
-  db.prepare('SELECT id FROM runs WHERE resumed_from = ? ORDER BY created_at DESC LIMIT 1').get(id)?.id ?? null;
+  db.prepare('SELECT id FROM runs WHERE resumed_from = ? ORDER BY created_at DESC LIMIT 1')
+    .get(id)?.id ?? null;
 
 // ---- chains ----
 
 export function insertChain(c) {
-  db.prepare('INSERT INTO chains (id, session, name, task, cwd, options, stages, stage, created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-    .run(c.id, c.session, c.name, c.task, c.cwd, JSON.stringify(c.options), JSON.stringify(c.stages), c.stage ?? null, nowIso());
+  db.prepare(`INSERT INTO chains (id, session, name, task, cwd, options, stages, stage, created_at)
+              VALUES (?,?,?,?,?,?,?,?,?)`)
+    .run(c.id, c.session, c.name, c.task, c.cwd, JSON.stringify(c.options), JSON.stringify(c.stages),
+      c.stage ?? null, nowIso());
 }
 export const getChain = (id) => db.prepare('SELECT * FROM chains WHERE id = ?').get(id);
-export function updateChain(id, fields) {
-  const keys = Object.keys(fields);
-  db.prepare(`UPDATE chains SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`)
-    .run(...keys.map((k) => fields[k]), id);
-}
+export const updateChain = (id, fields) => updateRow('chains', id, fields);
 export const listChains = (session, limit = 20) =>
-  db.prepare(`SELECT id, name, status, stage, stage_index, current_run, fix_rounds, substr(task,1,80) AS task, created_at, finished_at
+  db.prepare(`SELECT id, name, status, stage, stage_index, current_run, fix_rounds, substr(task,1,80) AS task,
+                created_at, finished_at
               FROM chains WHERE session = ? ORDER BY created_at DESC LIMIT ?`).all(session, limit);
 
 // ---- server-wide settings ----
 
-export const getSetting = (key) => db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value ?? null;
+export const getSetting = (key) =>
+  db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value ?? null;
 
 export function setSetting(key, value) {
   if (value === null) db.prepare('DELETE FROM settings WHERE key = ?').run(key);
-  else db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value')
-    .run(key, String(value));
+  else {
+    db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?)
+                ON CONFLICT (key) DO UPDATE SET value = excluded.value`).run(key, String(value));
+  }
 }

@@ -3,7 +3,8 @@
 import { jsonLines, countTools } from './util.js';
 
 export default {
-  bin: ['cursor-agent', 'agent'], // the installer provides both; `agent` is a generic name, so prefer cursor-agent
+  // The installer provides both; `agent` is a generic name, so prefer cursor-agent.
+  bin: ['cursor-agent', 'agent'],
   docs: 'https://cursor.com/docs/cli',
   defaultModel: { read: null, write: null }, // use Cursor's configured default
   effortNote: 'not supported by the Cursor CLI; ignored',
@@ -28,7 +29,11 @@ export default {
       const key = Object.keys(tc)[0] ?? 'unknown';
       return key === 'function' ? tc.function?.name ?? 'function' : key.replace(/ToolCall$/, '');
     };
-    const failed = done.filter((e) => { const v = Object.values(e.tool_call ?? {})[0]; return v?.result && !v.result.success; });
+    const failedCall = (e) => {
+      const v = Object.values(e.tool_call ?? {})[0];
+      return v?.result && !v.result.success;
+    };
+    const failed = done.filter(failedCall);
     return {
       text, tokens: null, cost: null,
       steps: events.filter((e) => e.type === 'assistant').length || null,
@@ -43,7 +48,9 @@ export default {
         const key = Object.keys(e.tool_call ?? {})[0] ?? 'unknown';
         return `tool: ${key === 'function' ? e.tool_call.function?.name : key.replace(/ToolCall$/, '')}`;
       }
-      if (e.type === 'assistant') return (e.message?.content ?? []).map((c) => c.text ?? '').join('').slice(0, 300) || null;
+      if (e.type === 'assistant') {
+        return (e.message?.content ?? []).map((c) => c.text ?? '').join('').slice(0, 300) || null;
+      }
     } catch {}
     return null;
   },

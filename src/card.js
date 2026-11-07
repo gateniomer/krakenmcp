@@ -13,10 +13,10 @@ export const CARD_WIDTH = 64; // total columns, borders included
 // Terminal columns of one code point: 0 for combining marks and joiners, 2 for emoji and East Asian
 // wide characters, 1 otherwise. Close enough for what cards contain (no grapheme clusters).
 function cpWidth(cp) {
-  if (cp === 0x200d || (cp >= 0x200b && cp <= 0x200f) || (cp >= 0xfe00 && cp <= 0xfe0f) || (cp >= 0x0300 && cp <= 0x036f)) return 0;
-  if (cp >= 0x1f000 || (cp >= 0x1100 && cp <= 0x115f) || (cp >= 0x2e80 && cp <= 0xa4cf) || (cp >= 0xac00 && cp <= 0xd7a3)
-    || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe30 && cp <= 0xfe4f) || (cp >= 0xff00 && cp <= 0xff60)
-    || (cp >= 0xffe0 && cp <= 0xffe6)) return 2;
+  const within = (ranges) => ranges.some(([a, b]) => cp >= a && cp <= b);
+  if (within([[0x200b, 0x200f], [0xfe00, 0xfe0f], [0x0300, 0x036f]])) return 0;
+  if (cp >= 0x1f000 || within([[0x1100, 0x115f], [0x2e80, 0xa4cf], [0xac00, 0xd7a3], [0xf900, 0xfaff],
+    [0xfe30, 0xfe4f], [0xff00, 0xff60], [0xffe0, 0xffe6]])) return 2;
   return 1;
 }
 export const displayWidth = (s) => [...s].reduce((n, ch) => n + cpWidth(ch.codePointAt(0)), 0);
@@ -49,7 +49,8 @@ function wrap(s, width, maxLines) {
 }
 
 const pad = (s, width) => s + ' '.repeat(Math.max(0, width - displayWidth(s)));
-export const tildify = (p) => (p && homedir() && p.startsWith(homedir()) ? `~${p.slice(homedir().length)}` : p);
+export const tildify = (p) =>
+  (p && homedir() && p.startsWith(homedir()) ? `~${p.slice(homedir().length)}` : p);
 const oneLine = (s) => String(s).replace(/\s+/g, ' ').trim();
 
 // title: left of the top border; status: right of it; rows: [label, value, maxLines?] (empty values skipped).

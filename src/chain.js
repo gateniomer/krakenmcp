@@ -19,7 +19,7 @@ import { resolveChain, checkChain } from './chains.js';
 import { startRun } from './runs.js';
 import { chainCard, FINAL } from './chain-view.js';
 import { isGitRepo } from './git.js';
-import { parseJson as json } from './util.js';
+import { parseJson as json, fail } from './util.js';
 
 export const isChainId = (id) => typeof id === 'string' && id.startsWith('chain_');
 
@@ -28,21 +28,24 @@ export const isChainId = (id) => typeof id === 'string' && id.startsWith('chain_
 export function startChain({ name = 'default', task, cwd, session = 'default', verify, max_fix_rounds,
   context_runs = [], overrides = [] }) {
   const dir = resolve(cwd ?? process.cwd());
-  if (!existsSync(dir)) throw new Error(`cwd does not exist: ${dir}`);
+  if (!existsSync(dir)) fail(`cwd does not exist: ${dir}`);
   const chain = resolveChain(name);
   const checked = checkChain(chain, dir);
-  if (checked.problems.length) throw new Error(`chain "${name}" cannot run:\n- ${checked.problems.join('\n- ')}`);
+  if (checked.problems.length) fail(`chain "${name}" cannot run:\n- ${checked.problems.join('\n- ')}`);
   const names = checked.stages.map((s) => s.tentacle);
   for (const o of overrides) {
-    if (!names.includes(o.stage)) throw new Error(`override names stage "${o.stage}"; chain ${name} has: ${names.join(', ')}`);
+    if (!names.includes(o.stage)) {
+      fail(`override names stage "${o.stage}"; chain ${name} has: ${names.join(', ')}`);
+    }
   }
-  if (verify && !checked.has_write) throw new Error(`chain ${name} has no write stage, so verify does not apply`);
+  if (verify && !checked.has_write) fail(`chain ${name} has no write stage, so verify does not apply`);
   if (checked.has_write) {
-    if (!isGitRepo(dir)) throw new Error(`${dir} is not a git repo; chain ${name}'s write stage needs a worktree`);
+    if (!isGitRepo(dir)) fail(`${dir} is not a git repo; chain ${name}'s write stage needs a worktree`);
   }
   for (const cid of context_runs) {
     const r = getRun(cid);
-    if (!r || r.status !== 'done' || !r.result) throw new Error(`context run ${cid} must exist and be done with a result`);
+    const ok = r?.status === 'done' && r.result;
+    if (!ok) fail(`context run ${cid} must exist and be done with a result`);
   }
   const id = newId('chain');
   insertChain({ id, session, name, task, cwd: dir, stages: checked.stages, stage: names[0],
@@ -54,7 +57,7 @@ export function startChain({ name = 'default', task, cwd, session = 'default', v
 
 export function cancelChain(id) {
   const c = getChain(id);
-  if (!c) throw new Error(`no chain ${id}`);
+  if (!c) fail(`no chain ${id}`);
   if (!['running', 'waiting'].includes(c.status)) return { chain_id: id, status: c.status, changed: false };
   if (c.pause) { // paused: no driver is running, so record it here
     updateChain(id, { status: 'cancelled', stage: 'finished', pause: null, finished_at: nowIso() });
@@ -71,30 +74,36 @@ export function cancelChain(id) {
 // a verify_failed pause it is the fix instruction for the write run (not counted as a fix round).
 export function resumeChain(id, input) {
   const c = getChain(id);
-  if (!c) throw new Error(`no chain ${id}`);
+  if (!c) fail(`no chain ${id}`);
   if (c.status === 'waiting' && !c.pause) {
-    throw new Error(`chain ${id} waits on a question: answer the stage run instead: resume("${c.current_run}", …)`);
+    fail(`chain ${id} waits on a question: answer the stage run instead: resume("${c.current_run}", …)`);
   }
-  if (c.status !== 'waiting') throw new Error(`chain ${id} is ${c.status}, not paused`);
+  if (c.status !== 'waiting') fail(`chain ${id} is ${c.status}, not paused`);
   const pause = json(c.pause, {});
   if (pause.reason === 'verify_failed') {
     const r = resumeRun(c.write_run, input, { session: c.session });
-    updateChain(id, { status: 'running', pause: null, stage: 'fix', current_run: r.run_id, write_run: r.run_id });
+    const fix = { stage: 'fix', current_run: r.run_id, write_run: r.run_id };
+    updateChain(id, { status: 'running', pause: null, ...fix });
   } else {
     updateChain(id, { status: 'running', pause: null, note: input ?? null });
   }
   updateChain(id, { pid: startNode('chain-driver.js', id) });
-  return { card: chainCard(getChain(id)), chain_id: id, status: 'running', continues_with: pause.reason === 'verify_failed' ? 'fix' : pause.next_stage,
+  const continuesWith = pause.reason === 'verify_failed' ? 'fix' : pause.next_stage;
+  return { card: chainCard(getChain(id)), chain_id: id, status: 'running', continues_with: continuesWith,
     next: `call status with run_id "${id}", wait_seconds 50 and since 0` };
 }
 
 // ---- driver: chain-driver.js calls tick() every second until it returns false ----
 // Each step below returns true to keep driving, false to stop (finished or paused).
 
-const VERIFY_FIX = (run) => `Kraken ran the verify command "${run.verify_cmd}" and it failed (exit ${run.verify_exit}). ` +
-  `Fix the cause, without weakening or skipping the checks.\n\nLast output:\n${run.verify_output ?? ''}`;
-const REVIEW_FIX = (run) => 'A reviewer looked at your changes and requested changes. Address every blocker and major ' +
-  `finding below (minor ones where cheap), keep the scope, and summarize what you changed.\n\n${run.result}`;
+const VERIFY_FIX = (run) =>
+  `Kraken ran the verify command "${run.verify_cmd}" and it failed (exit ${run.verify_exit}). ` +
+  'Fix the cause, without weakening or skipping the checks.' +
+  `\n\nLast output:\n${run.verify_output ?? ''}`;
+const REVIEW_FIX = (run) =>
+  'A reviewer looked at your changes and requested changes. Address every blocker and major finding ' +
+  'below (minor ones where cheap), keep the scope, and summarize what you changed.' +
+  `\n\n${run.result}`;
 
 function finish(ch, status, fields = {}) {
   updateChain(ch.id, { status, stage: 'finished', finished_at: nowIso(), ...fields });
@@ -106,7 +115,8 @@ function pauseChain(ch, pause, fields = {}) {
   return false;
 }
 
-const roundsLeft = ({ c, opts }) => c.fix_rounds < opts.max_fix_rounds && !!getRun(c.write_run)?.native_session;
+const roundsLeft = ({ c, opts }) =>
+  c.fix_rounds < opts.max_fix_rounds && !!getRun(c.write_run)?.native_session;
 
 // The finished run of every read stage before stage idx (after answers), in stage order.
 function earlierReads({ id, stages }, idx) {
@@ -129,23 +139,27 @@ function stageArgs(ch, idx) {
   const base = { cwd: c.cwd, session: c.session, chain_id: ch.id, chain_stage: idx, note: c.note ?? undefined,
     layers: [{ label: `chain ${c.name}`, values: st.layer }], overrides: callOverrides(ch, st.tentacle) };
   const reads = earlierReads(ch, idx);
-  if (st.kind === 'read') return { ...base, input: c.task, context_runs: [...(opts.context_runs ?? []), ...reads] };
+  const given = opts.context_runs ?? [];
+  if (st.kind === 'read') return { ...base, input: c.task, context_runs: [...given, ...reads] };
   if (st.kind === 'review') return { ...base, target_run: c.write_run };
-  return { ...base, input: c.task, plan_id: reads.at(-1), context_runs: st.needs_plan ? [] : opts.context_runs ?? [],
-    overrides: { ...base.overrides, ...(opts.verify ? { verify: opts.verify } : {}) } };
+  const verify = opts.verify ? { verify: opts.verify } : {};
+  return { ...base, input: c.task, plan_id: reads.at(-1), context_runs: st.needs_plan ? [] : given,
+    overrides: { ...base.overrides, ...verify } };
 }
 
 function startStage(ch, idx) {
   const st = ch.stages[idx];
   const r = startRun(st.tentacle, stageArgs(ch, idx));
-  updateChain(ch.id, { status: 'running', stage: st.tentacle, stage_index: idx, current_run: r.run_id, note: null,
-    ...(st.kind === 'write' ? { write_run: r.run_id } : {}) });
+  const write = st.kind === 'write' ? { write_run: r.run_id } : {};
+  updateChain(ch.id, { status: 'running', stage: st.tentacle, stage_index: idx, current_run: r.run_id,
+    note: null, ...write });
   return true;
 }
 
 function startFix(ch, instruction) {
   const r = resumeRun(ch.c.write_run, instruction, { session: ch.c.session });
-  updateChain(ch.id, { stage: 'fix', current_run: r.run_id, write_run: r.run_id, fix_rounds: ch.c.fix_rounds + 1 });
+  updateChain(ch.id, { stage: 'fix', current_run: r.run_id, write_run: r.run_id,
+    fix_rounds: ch.c.fix_rounds + 1 });
   return true;
 }
 
@@ -154,22 +168,28 @@ function advance(ch, idx, run) {
   const { stages } = ch, st = stages[idx], next = stages[idx + 1];
   if (!next) return finishLast(ch);
   if (st.autonomy === 'auto') return startStage(ch, idx + 1);
-  return pauseChain(ch, { reason: 'approval', after: st.tentacle, after_run: run.id, next_stage: next.tentacle },
-    { stage_index: idx + 1, stage: next.tentacle, current_run: null });
+  const pause = { reason: 'approval', after: st.tentacle, after_run: run.id, next_stage: next.tentacle };
+  return pauseChain(ch, pause, { stage_index: idx + 1, stage: next.tentacle, current_run: null });
 }
 
 // How the chain ends: a note, plus merge_commit when the last review's autonomy merged it.
 function landing(c, write, verdict, reviews) {
   if (!reviews.length) return { note: 'no review stage; review the branch before merging' };
   if (verdict === 'changes_requested') {
-    return { note: `the review still requests changes after ${c.fix_rounds} fix round(s); show the findings to the developer` };
+    const rounds = `${c.fix_rounds} fix round(s)`;
+    return { note: `the review still requests changes after ${rounds}; show the findings to the developer` };
   }
   if (verdict !== 'approve') return { note: 'the review gave no verdict; read it before merging' };
   if (reviews.at(-1).autonomy !== 'auto') return { note: 'ready to merge after the developer approves' };
   let m;
-  try { m = mergeRun(write.id, undefined, { autonomy: 'auto' }); } catch (e) { m = { auto_merge_blocked_by: [e.message] }; }
-  return m.outcome === 'merged' ? { merge_commit: m.merge_commit, note: `merged automatically as ${m.merge_commit}` }
-    : { note: `not merged automatically: ${(m.auto_merge_blocked_by ?? []).join('; ')}` };
+  try {
+    m = mergeRun(write.id, undefined, { autonomy: 'auto' });
+  } catch (e) {
+    m = { auto_merge_blocked_by: [e.message] };
+  }
+  const commit = m.outcome === 'merged' ? m.merge_commit : null;
+  if (commit) return { merge_commit: commit, note: `merged automatically as ${commit}` };
+  return { note: `not merged automatically: ${(m.auto_merge_blocked_by ?? []).join('; ')}` };
 }
 
 function finishLast(ch) {
@@ -211,19 +231,25 @@ function cancelNow(ch) {
 // The answered run was continued by a new run (resumed_from): follow it.
 function followAnswer(ch, run) {
   const next = resumedBy(run.id);
-  if (next) updateChain(ch.id, { status: 'running', current_run: next, ...(run.access === 'write' ? { write_run: next } : {}) });
+  if (!next) return true;
+  const write = run.access === 'write' ? { write_run: next } : {};
+  updateChain(ch.id, { status: 'running', current_run: next, ...write });
   return true;
 }
 
-const failure = (c, run) => [`${c.stage} run ${run.id} ended ${run.status}`, run.error && `: ${run.error.slice(0, 500)}`,
-  run.stop_reason && ` (${run.stop_reason})`].filter(Boolean).join('');
+const failure = (c, run) => [
+  `${c.stage} run ${run.id} ended ${run.status}`,
+  run.error && `: ${run.error.slice(0, 500)}`,
+  run.stop_reason && ` (${run.stop_reason})`,
+].filter(Boolean).join('');
 
 export function tick(id) {
   const c = getChain(id);
   if (!c || FINAL.includes(c.status) || c.pause) return false;
   const ch = { id, c, opts: json(c.options, {}), stages: json(c.stages, []) };
   if (c.cancel_requested) return cancelNow(ch);
-  if (!c.current_run) return startStage(ch, c.stage_index); // just started, or resumed after an approval pause
+  // Just started, or resumed after an approval pause.
+  if (!c.current_run) return startStage(ch, c.stage_index);
   const run = getRun(c.current_run);
   if (IN_PROGRESS.includes(run.status)) return true;
   if (run.status === 'waiting') {
@@ -232,6 +258,7 @@ export function tick(id) {
   }
   if (run.status === 'answered') return followAnswer(ch, run);
   const isWrite = run.access === 'write';
-  if (!(run.status === 'done' || (isWrite && run.status === 'verify_failed'))) return finish(ch, 'failed', { error: failure(c, run) });
+  const ended = run.status === 'done' || (isWrite && run.status === 'verify_failed');
+  if (!ended) return finish(ch, 'failed', { error: failure(c, run) });
   return isWrite ? afterWrite(ch, run) : afterRead(ch, run);
 }

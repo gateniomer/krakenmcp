@@ -10,7 +10,8 @@ export function parseJson(text, fallback = undefined) {
 export const toDate = (s) => new Date(s.includes('T') ? s : `${s.replace(' ', 'T')}Z`);
 
 // Milliseconds from `start` to `end` (or to now when it has not ended); undefined without a start.
-export const elapsedMs = (start, end) => (start ? (end ? toDate(end) : new Date()) - toDate(start) : undefined);
+export const elapsedMs = (start, end) =>
+  (start ? (end ? toDate(end) : new Date()) - toDate(start) : undefined);
 
 // Read every page: fetch(after) returns up to `size` rows ordered by id.
 export function pageAll(fetch, since = 0, size = 200) {
@@ -22,3 +23,6 @@ export function pageAll(fetch, since = 0, size = 200) {
     after = rows.at(-1).id;
   }
 }
+
+// Throw an Error with this message; usable as an expression (`x ?? fail('…')`).
+export const fail = (message) => { throw new Error(message); };

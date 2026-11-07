@@ -30,28 +30,33 @@ export default {
       const key = e.message.id ?? `#${messages.size}`;
       const prev = messages.get(key);
       const content = Array.isArray(e.message.content) ? e.message.content : [];
-      messages.set(key, prev ? { ...prev, content: [...prev.content, ...content] } : { ...e.message, content });
+      const merged = prev ? { ...prev, content: [...prev.content, ...content] } : { ...e.message, content };
+      messages.set(key, merged);
     }
     const blocks = (m) => (Array.isArray(m.content) ? m.content : []);
-    const lastText = [...messages.values()].reverse().map((m) => blocks(m).filter((b) => b.type === 'text').map((b) => b.text).join(''))
-      .find(Boolean) ?? '';
+    const textOf = (m) => blocks(m).filter((b) => b.type === 'text').map((b) => b.text).join('');
+    const lastText = [...messages.values()].reverse().map(textOf).find(Boolean) ?? '';
     const tokens = emptyTokens();
     const add = (u = {}) => {
       tokens.input += u.input_tokens || 0; tokens.output += u.output_tokens || 0;
-      tokens.cache_read += u.cache_read_input_tokens || 0; tokens.cache_write += u.cache_creation_input_tokens || 0;
+      tokens.cache_read += u.cache_read_input_tokens || 0;
+      tokens.cache_write += u.cache_creation_input_tokens || 0;
     };
     if (result?.usage) add(result.usage); else for (const m of messages.values()) add(m.usage);
-    const toolNames = [...messages.values()].flatMap((m) => blocks(m).filter((b) => b.type === 'tool_use').map((b) => b.name ?? 'unknown'));
+    const toolsOf = (m) => blocks(m).filter((b) => b.type === 'tool_use').map((b) => b.name ?? 'unknown');
+    const toolNames = [...messages.values()].flatMap(toolsOf);
     const failed = events.filter((e) => e.type === 'user').flatMap((e) => blocks(e.message ?? {}))
       .filter((b) => b.type === 'tool_result' && b.is_error).length;
-    if (!events.length) return { text: stdout.trim(), nativeSession: null, tokens: null, cost: null, steps: null, toolCalls: null };
+    const none = { nativeSession: null, tokens: null, cost: null, steps: null, toolCalls: null };
+    if (!events.length) return { text: stdout.trim(), ...none };
     return {
       text: (result?.result ?? lastText).trim(),
       nativeSession: result?.session_id ?? events.find((e) => e.session_id)?.session_id ?? null,
       tokens, cost: result?.total_cost_usd ?? null, steps: result?.num_turns ?? (messages.size || null),
       toolCalls: countTools(toolNames, failed),
       overBudget: /budget/i.test(result?.subtype ?? ''),
-      error: result?.is_error ? `${result.subtype ?? 'error'}${result.result ? `: ${result.result}` : ''}` : undefined,
+      error: result?.is_error ? [result.subtype ?? 'error', result.result].filter(Boolean).join(': ')
+        : undefined,
     };
   },
   onLine(line) {

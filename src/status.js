@@ -6,6 +6,7 @@ import { isChainId } from './chain.js';
 import { describeChain, chainStatus, chainFeed, chainSummary, chainCard } from './chain-view.js';
 import { describe } from './view.js';
 import { runFeed, runSummary, runCard } from './feed.js';
+import { fail } from './util.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -16,7 +17,8 @@ function subject(id) {
       summary: chainSummary, card: chainCard, feed: chainFeed, describe: describeChain };
   }
   return { kind: 'run', load: () => getRun(id), busy: (r) => IN_PROGRESS.includes(r.status),
-    summary: runSummary, card: runCard, feed: runFeed, describe: (r, full, live) => ({ ...describe(r, full), ...live }) };
+    summary: runSummary, card: runCard, feed: runFeed,
+    describe: (r, full, live) => ({ ...describe(r, full), ...live }) };
 }
 
 // Poll once a second until it is no longer busy or the wait is over. A progress notification goes
@@ -42,7 +44,7 @@ export async function status({ run_id, wait_seconds = 0, full = false, since }, 
   pump(); // also recovers runs whose worker died, and starts queued runs if there is room
   const s = subject(run_id);
   let item = s.load();
-  if (!item) throw new Error(`no ${s.kind} ${run_id}`);
+  if (!item) fail(`no ${s.kind} ${run_id}`);
   item = await waitWhileBusy(s, item, wait_seconds, progress);
   const summary = s.summary(item);
   const card = s.card(item, summary);

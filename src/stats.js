@@ -1,8 +1,12 @@
-// Session views: totals per tentacle | agent | model, what needs the developer, and which agents
-// the tentacles depend on.
+// Reports: a session at a glance (totals per tentacle | agent | model, what needs the developer),
+// which agents the tentacles depend on, and the resolved settings the tentacles tool shows.
 import { IN_PROGRESS, allRuns, listRuns, listChains } from './store.js';
-import { notReported } from './view.js';
-import { resolveTentacle, knownNames } from './tentacles.js';
+import { notReported, clip } from './view.js';
+import { resolveTentacle, knownNames, userDir, userTentacles } from './tentacles.js';
+import { knownChains, resolveChain, checkChain, userChainDir, userChains } from './chains.js';
+import { agentInfo, checkAgents } from './agents.js';
+import { maxParallel } from './scheduler.js';
+import { repoRoot } from './git.js';
 import { parseJson as parse } from './util.js';
 
 
@@ -61,10 +65,48 @@ export function sessionSummary(session) {
 export function agentReport(dir, check) {
   const usedBy = {};
   for (const n of knownNames(dir)) {
-    try { const a = resolveTentacle(n, dir).settings.agent; (usedBy[a] ??= []).push(n); } catch { /* broken custom tentacle */ }
+    let agent;
+    try { agent = resolveTentacle(n, dir).settings.agent; } catch { continue; } // a broken custom tentacle
+    (usedBy[agent] ??= []).push(n);
   }
   const agents = check().map((a) => ({ ...a, used_by: usedBy[a.name] ?? [] }));
   const blocked = agents.filter((a) => !a.installed && a.used_by.length)
     .map((a) => `${a.used_by.join(', ')} use ${a.name}, which is not installed`);
-  return { agents, problems: blocked, note: 'Login is not checked; a missing login shows up as a failed run.' };
+  const note = 'Login is not checked; a missing login shows up as a failed run.';
+  return { agents, problems: blocked, note };
+}
+
+const orNone = (list) => (list.length ? list : undefined);
+
+function tentacleInfo(name, dir, showPrompts) {
+  try {
+    const t = resolveTentacle(name, dir);
+    const prompt = showPrompts ? t.settings.prompt : clip(t.settings.prompt, 120);
+    return { name, builtin: t.builtin, needs_plan: t.needs_plan, user_file: t.user_file,
+      settings: { ...t.settings, prompt }, sources: t.sources };
+  } catch (e) { return { name, error: e.message }; }
+}
+
+function chainInfo(name, dir) {
+  try {
+    const c = resolveChain(name), k = checkChain(c, dir);
+    const stages = k.stages.map(({ tentacle, kind, autonomy, autonomy_source }) =>
+      ({ tentacle, kind, autonomy, autonomy_source }));
+    return { name, builtin: c.builtin, description: c.description, user_file: c.user_file,
+      max_fix_rounds: c.max_fix_rounds, stages, problems: orNone(k.problems) };
+  } catch (e) { return { name, error: e.message }; }
+}
+
+// What the tentacles tool returns: every tentacle and chain with its settings and their sources,
+// the agents (with versions when checkAll), and the limits.
+export function settingsReport(dir, { showPrompts = false, checkAll = false } = {}) {
+  const tentacles = knownNames(dir).map((n) => tentacleInfo(n, dir, showPrompts));
+  const agents = agentReport(dir, checkAll ? checkAgents : agentInfo);
+  return {
+    repo: repoRoot(dir), tentacles, chains: knownChains().map((n) => chainInfo(n, dir)),
+    agents: agents.agents, agent_problems: orNone(agents.problems),
+    limits: { max_parallel: maxParallel() },
+    user_files: { dir: userDir(), problems: orNone(userTentacles().problems) },
+    chain_files: { dir: userChainDir(), problems: orNone(userChains().problems) },
+  };
 }

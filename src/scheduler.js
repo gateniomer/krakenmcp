@@ -19,13 +19,16 @@ export function reapStale() {
   for (const r of db.prepare("SELECT id, session, pid, agent_pid FROM runs WHERE status = 'running'").all()) {
     if (alive(r.pid)) continue;
     killTree(r.agent_pid);
-    updateRun(r.id, { status: 'failed', finished_at: nowIso(), error: 'the worker process exited unexpectedly (crash or restart)' });
-    addMessage({ session: r.session, run_id: r.id, sender: 'kraken', kind: 'failed', body: 'worker died; marked failed' });
+    const error = 'the worker process exited unexpectedly (crash or restart)';
+    updateRun(r.id, { status: 'failed', finished_at: nowIso(), error });
+    addMessage({ session: r.session, run_id: r.id, sender: 'kraken', kind: 'failed',
+      body: 'worker died; marked failed' });
     reaped.push(r.id);
   }
   // Claimed by the scheduler but the worker never started (spawn failed): put back in the queue.
   const stale = new Date(Date.now() - 60_000).toISOString();
-  db.prepare("UPDATE runs SET pid = NULL, claimed_at = NULL WHERE status = 'queued' AND pid = -1 AND claimed_at < ?").run(stale);
+  db.prepare(`UPDATE runs SET pid = NULL, claimed_at = NULL
+              WHERE status = 'queued' AND pid = -1 AND claimed_at < ?`).run(stale);
   // Chains whose driver died. A paused chain has no driver (pid null) and is left alone.
   for (const p of db.prepare("SELECT id, pid FROM chains WHERE status IN ('running', 'waiting')").all()) {
     if (p.pid > 0 && !alive(p.pid)) {
@@ -43,10 +46,12 @@ export function pump() {
   const claimed = [];
   db.exec('BEGIN IMMEDIATE');
   try {
-    const active = db.prepare("SELECT COUNT(*) AS n FROM runs WHERE status = 'running' OR (status = 'queued' AND pid = -1)").get().n;
+    const active = db.prepare(`SELECT COUNT(*) AS n FROM runs
+                               WHERE status = 'running' OR (status = 'queued' AND pid = -1)`).get().n;
     const free = maxParallel() - active;
     if (free > 0) {
-      const next = db.prepare("SELECT id FROM runs WHERE status = 'queued' AND pid IS NULL ORDER BY created_at LIMIT ?").all(free);
+      const next = db.prepare(`SELECT id FROM runs WHERE status = 'queued' AND pid IS NULL
+                               ORDER BY created_at LIMIT ?`).all(free);
       for (const { id } of next) {
         db.prepare('UPDATE runs SET pid = -1, claimed_at = ? WHERE id = ?').run(nowIso(), id);
         claimed.push(id);
@@ -61,7 +66,8 @@ export function pump() {
 export function queueInfo(runId) {
   const run = getRun(runId);
   if (run?.status !== 'queued' || run.pid === -1) return undefined;
-  const ahead = db.prepare("SELECT COUNT(*) AS n FROM runs WHERE status = 'queued' AND pid IS NULL AND created_at < ?").get(run.created_at).n;
+  const ahead = db.prepare(`SELECT COUNT(*) AS n FROM runs
+    WHERE status = 'queued' AND pid IS NULL AND created_at < ?`).get(run.created_at).n;
   return { waiting_for_slot: true, ahead, max_parallel: maxParallel() };
 }
 
@@ -70,9 +76,8 @@ export function startWorker(runId) {
 }
 
 export function startNode(script, id) {
-  const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', join(ROOT, 'src', script), id], {
-    detached: true, stdio: 'ignore', env: process.env,
-  });
+  const args = ['--disable-warning=ExperimentalWarning', join(ROOT, 'src', script), id];
+  const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore', env: process.env });
   child.unref();
   return child.pid;
 }

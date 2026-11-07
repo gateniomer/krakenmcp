@@ -8,27 +8,32 @@ import { reviewInput } from './branches.js';
 import { gitIn, isGitRepo } from './git.js';
 import { resolveTentacle, renderPrompt, formatContext } from './tentacles.js';
 import { startCard } from './feed.js';
+import { fail } from './util.js';
 
 // Create and start a run of any tentacle.
 // Chain stages pass chain_id / chain_stage, their stage settings as layers, and the developer's note.
-export function startRun(name, { input, plan_id, context_runs = [], target_run, cwd, session, overrides, chain_id,
-  chain_stage, layers = [], note }) {
+export function startRun(name, { input, plan_id, context_runs = [], target_run, cwd, session, overrides,
+  chain_id, chain_stage, layers = [], note }) {
   let planRun = null;
   if (plan_id) {
     planRun = getRun(plan_id);
-    if (!planRun) throw new Error(`no run with id ${plan_id}`);
-    if (planRun.status !== 'done' || !planRun.result) throw new Error(`run ${plan_id} is ${planRun.status}; it must be done with a result`);
+    if (!planRun) fail(`no run with id ${plan_id}`);
+    if (planRun.status !== 'done' || !planRun.result) {
+      fail(`run ${plan_id} is ${planRun.status}; it must be done with a result`);
+    }
   }
   const contextRuns = context_runs.map((cid) => {
     const r = getRun(cid);
-    if (!r) throw new Error(`no run with id ${cid} (context_runs)`);
-    if (r.status !== 'done' || !r.result) throw new Error(`context run ${cid} is ${r.status}; it must be done with a result`);
+    if (!r) fail(`no run with id ${cid} (context_runs)`);
+    if (r.status !== 'done' || !r.result) {
+      fail(`context run ${cid} is ${r.status}; it must be done with a result`);
+    }
     return r;
   });
   const targetRun = target_run ? getRun(target_run) : null;
-  if (target_run && !targetRun) throw new Error(`no run with id ${target_run}`);
+  if (target_run && !targetRun) fail(`no run with id ${target_run}`);
   let dir = resolve(cwd ?? targetRun?.cwd ?? planRun?.cwd ?? contextRuns[0]?.cwd ?? process.cwd());
-  if (!existsSync(dir)) throw new Error(`cwd does not exist: ${dir}`);
+  if (!existsSync(dir)) fail(`cwd does not exist: ${dir}`);
 
   const t = resolveTentacle(name, dir, overrides, layers);
   const s = t.settings;
@@ -36,48 +41,52 @@ export function startRun(name, { input, plan_id, context_runs = [], target_run, 
   const limits = { max_cost_usd: s.max_cost_usd ?? undefined, max_tokens: s.max_tokens ?? undefined };
   const reports = AGENTS[s.agent].reports;
   const warnings = [
-    limits.max_cost_usd && !reports.cost ? `${s.agent} does not report cost, so max_cost_usd cannot be enforced` : null,
-    limits.max_tokens && !reports.tokens ? `${s.agent} does not report tokens, so max_tokens cannot be enforced` : null,
+    limits.max_cost_usd && !reports.cost
+      ? `${s.agent} does not report cost, so max_cost_usd cannot be enforced` : null,
+    limits.max_tokens && !reports.tokens
+      ? `${s.agent} does not report tokens, so max_tokens cannot be enforced` : null,
   ].filter(Boolean);
-  if (t.needs_plan && !planRun) throw new Error(`tentacle "${name}" needs plan_id (its prompt uses {{plan}})`);
+  if (t.needs_plan && !planRun) fail(`tentacle "${name}" needs plan_id (its prompt uses {{plan}})`);
 
   // Tentacles whose prompt uses {{diff}} (review): the target run's changes, or uncommitted changes.
   let diff = null, readDir = dir;
   if (t.needs_diff) {
-    if (s.access !== 'read') throw new Error(`tentacle "${name}" uses {{diff}} and must have read access`);
+    if (s.access !== 'read') fail(`tentacle "${name}" uses {{diff}} and must have read access`);
     const ri = reviewInput(target_run, dir);
     diff = ri.diff; readDir = ri.workdir; dir = ri.cwd;
     if (ri.planId && !contextRuns.some((r) => r.id === ri.planId)) {
       const pr = getRun(ri.planId); if (pr?.result) contextRuns.unshift(pr);
     }
-  } else if (target_run) throw new Error(`tentacle "${name}" does not take run_id (only tentacles using {{diff}})`);
+  } else if (target_run) fail(`tentacle "${name}" does not take run_id (only tentacles using {{diff}})`);
   const task = input ?? targetRun?.task ?? planRun?.task
     ?? (t.needs_diff ? 'Review the uncommitted changes in this repository.' : undefined);
-  if (!task) throw new Error('input is required');
+  if (!task) fail('input is required');
 
   const id = newId(name.slice(0, 8));
   let workdir = readDir, branch = null, base_sha = null;
   if (s.access === 'write') {
-    if (!isGitRepo(dir)) throw new Error(`${dir} is not a git repo; write tentacles work on a branch in a git worktree`);
+    if (!isGitRepo(dir)) fail(`${dir} is not a git repo; write tentacles work on a branch in a git worktree`);
     workdir = join(WORKTREES_DIR, id);
     branch = `kraken/${id}`;
     base_sha = gitIn(dir, 'rev-parse', 'HEAD');
     gitIn(dir, 'worktree', 'add', '-b', branch, workdir, base_sha);
   }
-  let prompt = renderPrompt(t, { task, plan: planRun?.result, context: formatContext(contextRuns), diff, workdir, repo: t.repo });
+  const context = formatContext(contextRuns);
+  let prompt = renderPrompt(t, { task, plan: planRun?.result, context, diff, workdir, repo: t.repo });
   if (note) prompt += `\n\nDeveloper note for this step: ${note}`;
   insertRun({
     id, session, tentacle: name, access: s.access, plan_id: planRun?.id, task, agent: s.agent, model: s.model,
     effort: s.effort, prompt,
-    config: { settings: { ...s, prompt: undefined }, sources: t.sources, context_runs: contextRuns.map((r) => r.id), limits,
-      needs_diff: t.needs_diff || undefined },
+    config: { settings: { ...s, prompt: undefined }, sources: t.sources,
+      context_runs: contextRuns.map((r) => r.id), limits, needs_diff: t.needs_diff || undefined },
     timeout_min: s.timeout_min, cwd: dir, workdir, branch, verify_cmd: s.access === 'write' ? s.verify : null,
     base_sha, target_run: targetRun?.id, chain_id, chain_stage,
   });
   pump();
   return {
     card: startCard(getRun(id)),
-    run_id: id, tentacle: name, status: getRun(id).status, queue: queueInfo(id), agent: s.agent, model: s.model, effort: s.effort ?? undefined,
+    run_id: id, tentacle: name, status: getRun(id).status, queue: queueInfo(id),
+    agent: s.agent, model: s.model, effort: s.effort ?? undefined,
     workdir, branch: branch ?? undefined, verify: s.access === 'write' ? s.verify ?? undefined : undefined,
     next: `call status with run_id "${id}", wait_seconds 50 and since 0`,
     limits: limits.max_cost_usd || limits.max_tokens ? limits : undefined,

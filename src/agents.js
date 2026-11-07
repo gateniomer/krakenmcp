@@ -20,6 +20,7 @@ import claude from './agents/claude.js';
 import codex from './agents/codex.js';
 import cursor from './agents/cursor.js';
 import aider from './agents/aider.js';
+import { fail } from './util.js';
 
 // To add an agent: write src/agents/<name>.js (see the contract above) and list it here.
 export const AGENTS = { opencode, claude, codex, cursor, aider };
@@ -29,15 +30,17 @@ export const findBin = (a, path) => binsOf(a).map((b) => which(b, path)).find(Bo
 
 export function agentInfo() {
   return Object.entries(AGENTS).map(([name, a]) => ({
-    name, installed: !!findBin(a), path: findBin(a), defaultModel: a.defaultModel, effort: a.effortNote, reports: a.reports,
+    name, installed: !!findBin(a), path: findBin(a),
+    defaultModel: a.defaultModel, effort: a.effortNote, reports: a.reports,
   }));
 }
 
 export function resolveAgent(name) {
   const a = AGENTS[name];
-  if (!a) throw new Error(`Unknown agent "${name}". Known: ${Object.keys(AGENTS).join(', ')}`);
+  if (!a) fail(`Unknown agent "${name}". Known: ${Object.keys(AGENTS).join(', ')}`);
   const path = findBin(a);
-  if (!path) throw new Error(`Agent "${name}" is not installed (no ${binsOf(a).map((b) => `"${b}"`).join(' or ')} on PATH).`);
+  const looked = binsOf(a).map((b) => `"${b}"`).join(' or ');
+  if (!path) fail(`Agent "${name}" is not installed (no ${looked} on PATH).`);
   return { ...a, path };
 }
 
@@ -48,10 +51,14 @@ export function checkAgents(path = process.env.PATH) {
     const bin = findBin(a, path);
     if (!bin) return { name, installed: false, looked_for: binsOf(a), install_docs: a.docs };
     let r;
-    try { r = spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] }); }
+    const opts = { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] };
+    try { r = spawnSync(bin, ['--version'], opts); }
     catch (e) { r = { status: null, error: e }; }
-    const version = `${r.stdout ?? ''}${r.stderr ?? ''}`.split('\n').map((l) => l.trim()).find(Boolean) ?? null;
+    const lines = `${r.stdout ?? ''}${r.stderr ?? ''}`.split('\n').map((l) => l.trim());
+    const version = lines.find(Boolean) ?? null;
+    const why = r.error ? `: ${r.error.message}` : '';
     return { name, installed: true, path: bin, version: r.status === 0 ? version : null,
-      ...(r.status === 0 ? {} : { problem: `"${bin} --version" failed${r.error ? `: ${r.error.message}` : ''}` }) };
+      ...(r.status === 0 ? {} : { problem: `"${bin} --version" failed${why}` }),
+    };
   });
 }

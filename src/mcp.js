@@ -18,30 +18,35 @@ export function createServer({ info, instructions, tools: hasTools = true, out =
 
   const send = (msg) => out.write(`${JSON.stringify({ jsonrpc: '2.0', ...msg })}\n`);
   const notify = (method, params) => send({ method, params });
+  const sendError = (id, code, message) => send({ id, error: { code, message } });
+  const errorResult = (text) => ({ content: [{ type: 'text', text }], isError: true });
 
   const capabilities = hasTools ? { tools: {} } : {};
 
   const handlers = {
     initialize: (p) => {
-      const protocolVersion = PROTOCOL_VERSIONS.includes(p?.protocolVersion) ? p.protocolVersion : PROTOCOL_VERSIONS[0];
+      const asked = p?.protocolVersion;
+      const protocolVersion = PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0];
       return { protocolVersion, capabilities, serverInfo: info, ...(instructions && { instructions }) };
     },
     ping: () => ({}),
   };
   if (hasTools) {
     handlers['tools/list'] = () => ({
-      tools: [...tools.entries()].map(([name, t]) => ({ name, description: t.description, inputSchema: t.inputSchema })),
+      tools: [...tools.entries()]
+        .map(([name, t]) => ({ name, description: t.description, inputSchema: t.inputSchema })),
     });
     handlers['tools/call'] = async (p) => {
       const t = tools.get(p?.name);
       if (!t) throw new RpcError(ERR.params, `unknown tool ${p?.name}`);
       let args;
       try { args = validate(t.inputSchema, p.arguments ?? {}); }
-      catch (e) { return { content: [{ type: 'text', text: `Error: invalid input: ${e.message}` }], isError: true }; }
+      catch (e) { return errorResult(`Error: invalid input: ${e.message}`); }
       const token = p?._meta?.progressToken;
       const ctx = {
         progress: token === undefined ? null
-          : (progress, message) => notify('notifications/progress', { progressToken: token, progress, message }),
+          : (progress, message) =>
+            notify('notifications/progress', { progressToken: token, progress, message }),
       };
       return t.handler(args, ctx);
     };
@@ -49,17 +54,19 @@ export function createServer({ info, instructions, tools: hasTools = true, out =
 
   async function handle(msg) {
     if (msg?.jsonrpc !== '2.0' || typeof msg.method !== 'string') {
-      if (msg && 'id' in msg && !('result' in msg || 'error' in msg)) send({ id: msg.id ?? null, error: { code: ERR.invalid, message: 'invalid request' } });
-      return; // responses to requests we never send, or garbage
+      // A response to a request we never send, or garbage. Only a malformed request gets an answer.
+      const badRequest = msg && 'id' in msg && !('result' in msg || 'error' in msg);
+      if (badRequest) sendError(msg.id ?? null, ERR.invalid, 'invalid request');
+      return;
     }
     const isRequest = 'id' in msg;
     const h = handlers[msg.method];
     if (!isRequest) return; // notifications: initialized, cancelled, roots changed ... nothing to do
-    if (!h) return send({ id: msg.id, error: { code: ERR.method, message: `method not found: ${msg.method}` } });
+    if (!h) return sendError(msg.id, ERR.method, `method not found: ${msg.method}`);
     try {
       send({ id: msg.id, result: await h(msg.params) });
     } catch (e) {
-      send({ id: msg.id, error: { code: e instanceof RpcError ? e.code : ERR.internal, message: e.message } });
+      sendError(msg.id, e instanceof RpcError ? e.code : ERR.internal, e.message);
     }
   }
 
@@ -74,7 +81,7 @@ export function createServer({ info, instructions, tools: hasTools = true, out =
       rl.on('line', (line) => {
         if (!line.trim()) return;
         let msg;
-        try { msg = JSON.parse(line); } catch { return send({ id: null, error: { code: ERR.parse, message: 'parse error' } }); }
+        try { msg = JSON.parse(line); } catch { return sendError(null, ERR.parse, 'parse error'); }
         for (const m of Array.isArray(msg) ? msg : [msg]) {
           const p = handle(m).catch(() => {}).finally(() => pending.delete(p));
           pending.add(p);

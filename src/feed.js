@@ -3,7 +3,8 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { AGENTS } from './agents.js';
-import { PLANS_DIR, IN_PROGRESS, recentMessages, messagesSince, messagesSinceAll, lastMessageId, toolMessages } from './store.js';
+import { PLANS_DIR, IN_PROGRESS, recentMessages, messagesSince, messagesSinceAll, lastMessageId,
+  toolMessages } from './store.js';
 import { queueInfo } from './scheduler.js';
 import { metrics, nextOf } from './view.js';
 import { parseJson } from './util.js';
@@ -36,7 +37,8 @@ export function renderFeed(rows, labelOf, showId = '<id>') {
     const label = labelOf(m.run_id);
     if (m.kind === 'progress' && m.body.startsWith('tool: ')) {
       if (!group || group.run !== m.run_id) {
-        group = { run: m.run_id, attach: prevRun === m.run_id, label, counts: new Map(), index: lines.length };
+        group = { run: m.run_id, attach: prevRun === m.run_id, label, counts: new Map(),
+          index: lines.length };
         lines.push('');
       }
       const name = m.body.slice(6).trim();
@@ -56,13 +58,15 @@ export function renderFeed(rows, labelOf, showId = '<id>') {
     prevRun = m.run_id;
   }
   if (lines.length <= FEED_MAX_LINES) return lines;
-  return [`(+${lines.length - FEED_MAX_LINES} earlier lines; full log: krakenmcp show ${showId})`, ...lines.slice(-FEED_MAX_LINES)];
+  const dropped = `(+${lines.length - FEED_MAX_LINES} earlier lines; full log: krakenmcp show ${showId})`;
+  return [dropped, ...lines.slice(-FEED_MAX_LINES)];
 }
 
 export function runFeed(run, since = 0, all = false) {
   const rows = all ? messagesSinceAll(run.id, since) : messagesSince(run.id, since);
   const label = runLabel(run);
-  return { feed: renderFeed(rows, () => label, run.id), cursor: rows.length ? rows.at(-1).id : Math.max(since, lastMessageId(run.id)) };
+  const cursor = rows.length ? rows.at(-1).id : Math.max(since, lastMessageId(run.id));
+  return { feed: renderFeed(rows, () => label, run.id), cursor };
 }
 
 // ---- live summary: the facts behind the cards and the one-line headline progress notifications
@@ -154,8 +158,9 @@ export function runSummary(run, stage) {
 export const statusText = (status) => `${STATUS_GLYPH[status] ?? '●'} ${status}`;
 export const runTitle = (run) => `🦑 ${run.tentacle} › ${run.agent} ${String(modelOf(run)).split('/').at(-1)}`;
 const money = (usd) => (usd ? `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}` : null);
-export const timeLine = (ms, usd, tools, extra = []) => [elapsedText(ms), money(usd),
-  tools?.total ? `${tools.total} tool${tools.total === 1 ? '' : 's'}` : null, ...extra].filter(Boolean).join(' · ');
+const toolText = (tools) => (tools?.total ? `${tools.total} tool${tools.total === 1 ? '' : 's'}` : null);
+export const timeLine = (ms, usd, tools, extra = []) =>
+  [elapsedText(ms), money(usd), toolText(tools), ...extra].filter(Boolean).join(' · ');
 const firstLine = (s) => (s ?? '').split('\n').find((l) => l.trim()) ?? '';
 
 // The card for a run that was just started or resumed: what the head called, on which agent.
@@ -179,7 +184,8 @@ export function runCard(run, sum = runSummary(run)) {
   const time = timeLine(sum.elapsed_s * 1000, sum.cost_usd, sum.tools);
   if (IN_PROGRESS.includes(run.status)) {
     const said = sum.last_line && !sum.last_line.startsWith(sum.now.replace(/…$/, '')) ? sum.last_line : null;
-    return box(runTitle(run), statusText(run.status), [['run', run.id], ['time', time], ['now', sum.now], ['said', said, 2]]);
+    const rows = [['run', run.id], ['time', time], ['now', sum.now], ['said', said, 2]];
+    return box(runTitle(run), statusText(run.status), rows);
   }
   const file = join(PLANS_DIR, `${run.id}.md`);
   const diff = diffText(parseJson(run.diff_stat));

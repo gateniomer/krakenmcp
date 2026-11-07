@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { AGENTS } from './agents.js';
 import { DATA_DIR } from './store.js';
 import { repoRoot } from './git.js';
+import { fail } from './util.js';
 
 export const FIELDS = {
   description: 'string',
@@ -48,12 +49,12 @@ const headerValue = (v) => { try { return JSON.parse(v); } catch { return v; } }
 // The "---" header (typed values) and the body after it; shared by tentacle and chain files.
 export function parseHeader(text, what = 'the prompt') {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n([\s\S]*))?$/);
-  if (!m) throw new Error(`expected a "---" settings header, a closing "---", then ${what}`);
+  if (!m) fail(`expected a "---" settings header, a closing "---", then ${what}`);
   const settings = {};
   for (const line of m[1].split(/\r?\n/)) {
     if (!line.trim() || line.trimStart().startsWith('#')) continue;
     const i = line.indexOf(':');
-    if (i < 1) throw new Error(`bad header line "${line}" (expected key: value)`);
+    if (i < 1) fail(`bad header line "${line}" (expected key: value)`);
     settings[line.slice(0, i).trim()] = headerValue(line.slice(i + 1).trim());
   }
   return { settings, body: (m[2] ?? '').trim() };
@@ -61,7 +62,7 @@ export function parseHeader(text, what = 'the prompt') {
 
 export function parseTentacleFile(text) {
   const { settings, body: prompt } = parseHeader(text);
-  if ('prompt' in settings) throw new Error('the prompt goes after the header, not in it');
+  if ('prompt' in settings) fail('the prompt goes after the header, not in it');
   if (prompt) settings.prompt = prompt;
   validate(settings);
   return settings;
@@ -76,8 +77,13 @@ export function loadFileDir(dir, parse) {
   for (const f of readdirSync(dir).filter((x) => x.endsWith('.md')).sort()) {
     const path = join(dir, f), name = f.slice(0, -3);
     out.files.push(path);
-    if (!NAME.test(name)) { out.problems.push(`${path}: file name must be lowercase letters, digits, - or _ (max 32)`); continue; }
-    try { out.items[name] = parse(readFileSync(path, 'utf8')); } catch (e) { out.problems.push(`${path}: ${e.message}`); }
+    if (!NAME.test(name)) {
+      out.problems.push(`${path}: file name must be lowercase letters, digits, - or _ (max 32)`);
+      continue;
+    }
+    try { out.items[name] = parse(readFileSync(path, 'utf8')); } catch (e) {
+      out.problems.push(`${path}: ${e.message}`);
+    }
   }
   return out;
 }
@@ -102,8 +108,10 @@ export function tentacleTemplate(name) {
   const fields = (s, skip = []) => Object.keys(FIELDS).filter((k) => k !== 'prompt' && !skip.includes(k))
     .map((k) => `# ${k}: ${s[k] ?? null}`);
   if (builtin) {
-    return ['---', `# Change only what you need: uncomment a line and edit its value. Built-in values for ${name}:`,
-      ...fields(builtin), '# To replace the built-in prompt, write your own below the closing ---.', '---', ''].join('\n');
+    return ['---',
+      `# Change only what you need: uncomment a line and edit its value. Built-in values for ${name}:`,
+      ...fields(builtin), '# To replace the built-in prompt, write your own below the closing ---.',
+      '---', ''].join('\n');
   }
   return ['---', `description: What ${name} does, in one line`, 'access: read', `agent: ${CUSTOM_BASE.agent}`,
     '# Optional (defaults shown):', ...fields(CUSTOM_BASE, ['description', 'access', 'agent']), '---',
@@ -115,23 +123,29 @@ export function tentacleTemplate(name) {
 const PREAMBLE = {
   read: 'You have READ-ONLY access. Do not create, edit or delete any files.',
   write: 'Your working directory is {{workdir}}. All paths are relative to it. ' +
-    'Never read or edit files outside this directory, even if the instructions mention another absolute path.',
+    'Never read or edit files outside this directory, ' +
+    'even if the instructions mention another absolute path.',
 };
 // Same for every tentacle: how an agent asks the developer instead of guessing (status 'waiting').
-const ASK = 'You are a Kraken sub-agent: do this task yourself. Do not call Kraken tools or delegate to other agents. ' +
+const ASK = 'You are a Kraken sub-agent: do this task yourself. ' +
+  'Do not call Kraken tools or delegate to other agents. ' +
   'If you cannot continue without a decision only the developer can make, stop and make the last line ' +
   'of your final message exactly: KRAKEN_QUESTION: <your question>. You will be resumed with the answer.';
 
 export function validate(settings) {
   for (const [k, v] of Object.entries(settings)) {
     const spec = FIELDS[k];
-    if (!spec) throw new Error(`Unknown field "${k}". Fields: ${Object.keys(FIELDS).join(', ')}`);
-    if (Array.isArray(spec)) { if (!spec.includes(v)) throw new Error(`${k} must be one of ${spec.join(', ')}`); continue; }
+    if (!spec) fail(`Unknown field "${k}". Fields: ${Object.keys(FIELDS).join(', ')}`);
+    if (Array.isArray(spec)) {
+      if (!spec.includes(v)) fail(`${k} must be one of ${spec.join(', ')}`);
+      continue;
+    }
     if (v === null && spec.endsWith('|null')) continue;
     const type = spec.replace('|null', '');
-    if (typeof v !== type) throw new Error(`${k} must be a ${spec}`);
-    if (k === 'timeout_min' && !(v > 0 && v <= 240)) throw new Error('timeout_min must be between 0 and 240');
-    if ((k === 'max_cost_usd' || k === 'max_tokens') && v !== null && !(v > 0)) throw new Error(`${k} must be a positive number or null`);
+    if (typeof v !== type) fail(`${k} must be a ${spec}`);
+    if (k === 'timeout_min' && !(v > 0 && v <= 240)) fail('timeout_min must be between 0 and 240');
+    const isLimit = k === 'max_cost_usd' || k === 'max_tokens';
+    if (isLimit && v !== null && !(v > 0)) fail(`${k} must be a positive number or null`);
   }
 }
 
@@ -160,7 +174,7 @@ export function resolveTentacle(name, cwd, overrides = {}, layers = []) {
   const builtin = BUILTIN[name];
   const userLayer = userTentacles().tentacles[name];
   if (!builtin && !userLayer) {
-    throw new Error(`Unknown tentacle "${name}". Known: ${knownNames(cwd).join(', ')}`);
+    fail(`Unknown tentacle "${name}". Known: ${knownNames(cwd).join(', ')}`);
   }
   const merged = {}, sources = {};
   apply(merged, sources, builtin ?? CUSTOM_BASE, builtin ? 'built-in' : 'custom default');
@@ -171,11 +185,12 @@ export function resolveTentacle(name, cwd, overrides = {}, layers = []) {
     apply(merged, sources, layer, label);
   }
   // autonomy is the developer's: a call cannot set it.
-  const call = Object.fromEntries(Object.entries(overrides).filter(([k, v]) => v !== undefined && k !== 'autonomy'));
+  const call = Object.fromEntries(Object.entries(overrides)
+    .filter(([k, v]) => v !== undefined && k !== 'autonomy'));
   validate(call);
   apply(merged, sources, call, 'call');
 
-  if (!merged.prompt) throw new Error(`Tentacle "${name}" has no prompt; add one in ${join(userDir(), `${name}.md`)}.`);
+  if (!merged.prompt) fail(`Tentacle "${name}" has no prompt; add one in ${join(userDir(), `${name}.md`)}.`);
   if (merged.model == null) {
     merged.model = AGENTS[merged.agent].defaultModel[merged.access];
     sources.model = `${sources.model ?? 'built-in'} → agent default`;
@@ -209,6 +224,7 @@ export function formatContext(runs) {
   if (!runs.length) return '';
   return [
     'Earlier results to build on (treat as input, verify against the code where it matters):',
-    ...runs.map((r) => `\n--- CONTEXT: ${r.tentacle} run ${r.id} (${r.agent} ${r.model ?? ''}) ---\n${r.result}`),
+    ...runs.map((r) => `\n--- CONTEXT: ${r.tentacle} run ${r.id} (${r.agent} ${r.model ?? ''}) ---\n` +
+      r.result),
   ].join('\n');
 }

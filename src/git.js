@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { addMessage } from './store.js';
+import { fail } from './util.js';
 
 export const gitIn = (dir, ...args) =>
   execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -17,9 +18,11 @@ export const repoRoot = (cwd) => tryGit(resolve(cwd), 'rev-parse', '--show-tople
 // put the worktree back so the run can be resumed, updated or reviewed.
 export function ensureWorktree(run) {
   if (!run.branch || existsSync(run.workdir)) return false;
-  if (!tryGit(run.cwd, 'rev-parse', '--verify', '--quiet', run.branch)) throw new Error(`branch ${run.branch} no longer exists`);
+  const branchExists = tryGit(run.cwd, 'rev-parse', '--verify', '--quiet', run.branch);
+  if (!branchExists) fail(`branch ${run.branch} no longer exists`);
   tryGit(run.cwd, 'worktree', 'prune');
   gitIn(run.cwd, 'worktree', 'add', run.workdir, run.branch);
-  addMessage({ session: run.session, run_id: run.id, sender: 'kraken', kind: 'progress', body: `recreated missing worktree ${run.workdir}` });
+  addMessage({ session: run.session, run_id: run.id, sender: 'kraken', kind: 'progress',
+    body: `recreated missing worktree ${run.workdir}` });
   return true;
 }

@@ -34,7 +34,8 @@ export default {
     const tools = events.filter((e) => e.type === 'tool_use');
     const failed = tools.filter((e) => e.part?.state?.status && e.part.state.status !== 'completed').length;
     // Provider failures (network, auth, quota) arrive as error events on stdout, not stderr.
-    const errors = events.filter((e) => e.type === 'error').map((e) => [e.error?.type, e.error?.message ?? e.message].filter(Boolean).join(': '));
+    const errorText = (e) => [e.error?.type, e.error?.message ?? e.message].filter(Boolean).join(': ');
+    const errors = events.filter((e) => e.type === 'error').map(errorText);
     return {
       text, tokens, cost, steps,
       error: errors.length ? errors.at(-1) : undefined,

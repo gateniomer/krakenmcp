@@ -62,6 +62,9 @@ Requires Node 22.13+ (for `node:sqlite`), git, and macOS or Linux.
 - No runtime dependencies. The MCP SDK is a dev dependency only, so the e2e tests check the
   protocol with the official client.
 - Tool descriptions are read by models. Keep them plain and explicit about when to call.
+- Keep lines in `src/` at 110 characters or fewer (`test/unit/style.test.js` checks it). Keep files
+  small and single-purpose (most are under 250 lines) and functions short; throw with `fail()` from
+  `src/util.js`.
 - Merges need the developer's approval. The only exception is `autonomy: auto` on the review
   tentacle, which the developer sets in their own files; it merges only approved, verified,
   conflict-free branches. Never

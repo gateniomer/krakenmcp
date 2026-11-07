@@ -28,11 +28,14 @@ export default {
       tokens.input += u.input_tokens || 0; tokens.output += u.output_tokens || 0;
       tokens.reasoning += u.reasoning_output_tokens || 0; tokens.cache_read += u.cached_input_tokens || 0;
     }
-    const items = events.filter((e) => e.type === 'item.completed' && e.item && e.item.type !== 'agent_message' && e.item.type !== 'reasoning');
+    const isTool = (e) => e.type === 'item.completed' && e.item
+      && e.item.type !== 'agent_message' && e.item.type !== 'reasoning';
+    const items = events.filter(isTool);
     return {
       text, tokens, cost: null, steps: turns.length || null,
       nativeSession: events.find((e) => e.type === 'thread.started')?.thread_id ?? null,
-      toolCalls: countTools(items.map((e) => e.item.type), items.filter((e) => e.item.status === 'failed').length),
+      toolCalls: countTools(items.map((e) => e.item.type),
+        items.filter((e) => e.item.status === 'failed').length),
     };
   },
   onLine() { return null; },

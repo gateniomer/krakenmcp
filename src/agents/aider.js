@@ -33,7 +33,7 @@ export default {
           const m = part.trim().match(/^([\d.]+)([kKmM]?)\s+(sent|received|cache write|cache hit)/);
           if (!m) continue;
           const n = Math.round(Number(m[1]) * ({ k: 1e3, m: 1e6 }[m[2].toLowerCase()] ?? 1));
-          tokens[{ sent: 'input', received: 'output', 'cache write': 'cache_write', 'cache hit': 'cache_read' }[m[3]]] += n;
+          tokens[TOKEN_KIND[m[3]]] += n;
         }
       }
       const c = l.match(/Cost:\s*\$([\d.]+)\s+message/);
@@ -53,4 +53,12 @@ export default {
 // Aider's chat history lives next to the run's log; a resumed run keeps using the first run's file.
 const aiderHistory = (lastMessageFile, resumeSession) =>
   resumeSession ?? lastMessageFile.replace(/\.last\.txt$/, '.aider-chat.md');
-const NOISE = /^(Aider v|Main model:|Weak model:|Editor model:|Git repo:|Repo-map:|Model:|Added .+ to the chat|Tokens:|Cost:|Applied edit to |Commit [0-9a-f]{6,}|Use \/help|https:\/\/aider\.chat|Restored previous conversation history|Can't initialize prompt toolkit|─+\s*$)/;
+const TOKEN_KIND = { sent: 'input', received: 'output', 'cache write': 'cache_write',
+  'cache hit': 'cache_read' };
+// Aider's own status lines: never shown as progress.
+const NOISE = new RegExp(`^(${[
+  'Aider v', 'Main model:', 'Weak model:', 'Editor model:', 'Git repo:', 'Repo-map:', 'Model:',
+  'Added .+ to the chat', 'Tokens:', 'Cost:', 'Applied edit to ', 'Commit [0-9a-f]{6,}', 'Use /help',
+  'https://aider\\.chat', 'Restored previous conversation history', "Can't initialize prompt toolkit",
+  '─+\\s*$',
+].join('|')})`);

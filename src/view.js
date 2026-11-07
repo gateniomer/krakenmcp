@@ -2,12 +2,14 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { AGENTS } from './agents.js';
-import { PLANS_DIR, LOGS_DIR, IN_PROGRESS, recentMessages, lastMessageId, latestReview, resumedBy } from './store.js';
+import { PLANS_DIR, LOGS_DIR, IN_PROGRESS, recentMessages, lastMessageId, latestReview, resumedBy }
+  from './store.js';
 import { queueInfo } from './scheduler.js';
 import { resolveTentacle, stageKind } from './tentacles.js';
 import { parseJson as parse, toDate } from './util.js';
 
-export const clip = (s, n = 1500) => (s && s.length > n ? `${s.slice(0, n)}\n…[truncated, ${s.length} chars]` : s);
+export const clip = (s, n = 1500) =>
+  (s && s.length > n ? `${s.slice(0, n)}\n…[truncated, ${s.length} chars]` : s);
 const ms = (a, b) => (a && b ? toDate(b) - toDate(a) : undefined);
 
 // Metrics an agent's output does not contain, so they read "not reported" instead of zero.
@@ -32,59 +34,94 @@ export function metrics(run) {
   };
 }
 
+// ---- the next step: ask: = show the result, suggest exactly that step and wait; auto: = the
+// developer allowed the head to take it; stop: = report and wait ----
+
 // A run that ended badly must not be retried silently on another agent or model.
 export const STOP_NEXT = 'stop: report this error to the developer and ask how to proceed; ' +
   'do not retry or switch agent/model on your own';
 const STOP = ['failed', 'timeout', 'over_budget'];
 
-// The one step after a finished run. ask: = show the result, suggest exactly that step and wait;
-// auto: = the developer allowed the head to take it; stop: = report and wait. Hard stops (questions,
-// failures, verify_failed) never depend on autonomy. Pure, so it is unit-tested on its own.
-export function finishedNext(f) {
-  const mode = f.autonomy === 'auto' ? 'auto' : 'ask';
-  if (f.status === 'waiting') return `ask: put the question to the developer, then resume("${f.id}", their reply)`;
+// Questions, failures, answered runs, outcomes and verify_failed: never depend on autonomy.
+function stopNext(f) {
+  if (f.status === 'waiting') {
+    return `ask: put the question to the developer, then resume("${f.id}", their reply)`;
+  }
   if (STOP.includes(f.status)) return STOP_NEXT;
   if (f.status === 'cancelled') return 'stop: tell the developer it was cancelled and wait';
   if (f.chain_id) return `this run is a stage of chain ${f.chain_id}; follow status("${f.chain_id}")`;
-  if (f.status === 'answered' || f.newer_run) return f.newer_run ? `follow status("${f.newer_run}")` : undefined;
+  if (f.newer_run) return `follow status("${f.newer_run}")`;
+  if (f.status === 'answered') return null;
   if (f.outcome) return `stop: it was ${f.outcome}; ask the developer what is next`;
   if (f.status === 'verify_failed') {
-    return `stop: show the verify output; suggest resume("${f.id}", "fix the failing check") or discard("${f.id}")`;
+    return `stop: show the verify output; suggest resume("${f.id}", "fix the failing check") ` +
+      `or discard("${f.id}")`;
   }
-  if (f.status !== 'done') return undefined;
-  if (f.kind === 'write') return `${mode}: show the diff stat and verify result; suggest review(run_id: "${f.id}")`;
-  if (f.kind === 'review') {
-    if (!f.target_run) return 'ask: show the findings; the changes are the developer\'s own, nothing to merge';
-    if (f.verdict === 'approve') {
-      return mode === 'auto'
-        ? `auto: call merge("${f.target_run}"); it lands at once if nothing blocks it, otherwise show the preview`
-        : `ask: show the verdict; suggest merge("${f.target_run}")`;
-    }
-    if (f.verdict === 'changes_requested') {
-      return `${mode}: show the findings; suggest resume("${f.target_run}", "address the review findings"), then review again`;
-    }
-    return 'ask: show the review; ask the developer how to proceed';
+  return f.status === 'done' ? undefined : null;
+}
+
+function reviewNext(f, mode) {
+  const target = f.target_run;
+  if (!target) return 'ask: show the findings; the changes are the developer\'s own, nothing to merge';
+  if (f.verdict === 'approve') {
+    return mode === 'auto'
+      ? `auto: call merge("${target}"); it lands at once if nothing blocks it, otherwise show the preview`
+      : `ask: show the verdict; suggest merge("${target}")`;
   }
+  if (f.verdict === 'changes_requested') {
+    return `${mode}: show the findings; suggest resume("${target}", "address the review findings"), ` +
+      'then review again';
+  }
+  return 'ask: show the review; ask the developer how to proceed';
+}
+
+function readNext(f, mode) {
+  const context = `context_runs: ["${f.id}"]`;
   if (f.tentacle === 'think') {
     return mode === 'auto'
-      ? `auto: if it has no open questions call plan(task, context_runs: ["${f.id}"]); otherwise ask them first`
-      : `ask: relay the recommendation and its open questions; suggest plan(task + their answers, context_runs: ["${f.id}"])`;
+      ? `auto: if it has no open questions call plan(task, ${context}); otherwise ask them first`
+      : 'ask: relay the recommendation and its open questions; ' +
+        `suggest plan(task + their answers, ${context})`;
   }
   if (f.tentacle === 'plan') return `${mode}: summarize the plan (result_file); suggest execute("${f.id}")`;
-  return `${mode}: give the developer result_file and a short summary; suggest plan(task, context_runs: ["${f.id}"]) if they want a change`;
+  return `${mode}: give the developer result_file and a short summary; ` +
+    `suggest plan(task, ${context}) if they want a change`;
+}
+
+// The one step after a finished run. Pure, so it is unit-tested on its own.
+export function finishedNext(f) {
+  const stop = stopNext(f);
+  if (stop !== undefined) return stop ?? undefined;
+  const mode = f.autonomy === 'auto' ? 'auto' : 'ask';
+  if (f.kind === 'write') {
+    return `${mode}: show the diff stat and verify result; suggest review(run_id: "${f.id}")`;
+  }
+  return f.kind === 'review' ? reviewNext(f, mode) : readNext(f, mode);
 }
 
 // Kind and autonomy of a run's tentacle as the files say now (an edit applies to the next step).
 export function runFacts(run, { chain = true } = {}) {
-  let kind = run.access === 'write' ? 'write' : run.target_run || run.tentacle === 'review' ? 'review' : 'read';
+  const isReview = run.target_run || run.tentacle === 'review';
+  let kind = run.access === 'write' ? 'write' : isReview ? 'review' : 'read';
   let autonomy = 'ask';
-  try { const t = resolveTentacle(run.tentacle, run.cwd); kind = stageKind(t); autonomy = t.autonomy; } catch { /* tentacle file gone */ }
-  return { id: run.id, tentacle: run.tentacle, kind, status: run.status, verdict: run.verdict, target_run: run.target_run,
-    outcome: run.outcome, autonomy, newer_run: resumedBy(run.id), chain_id: chain ? run.chain_id : null };
+  try {
+    const t = resolveTentacle(run.tentacle, run.cwd);
+    kind = stageKind(t); autonomy = t.autonomy;
+  } catch { /* the tentacle file is gone */ }
+  return { id: run.id, tentacle: run.tentacle, kind, status: run.status, verdict: run.verdict,
+    target_run: run.target_run, outcome: run.outcome, autonomy, newer_run: resumedBy(run.id),
+    chain_id: chain ? run.chain_id : null };
+}
+
+export function nextOf(run) {
+  if (IN_PROGRESS.includes(run.status)) return {};
+  const f = runFacts(run);
+  return { next: finishedNext(f), autonomy: f.autonomy };
 }
 
 export function describe(run, full = false) {
   const resultFile = join(PLANS_DIR, `${run.id}.md`);
+  const verifyOutput = full ? run.verify_output : clip(run.verify_output, 600);
   return {
     id: run.id, tentacle: run.tentacle, access: run.access, status: run.status,
     queue: queueInfo(run.id),
@@ -103,18 +140,9 @@ export function describe(run, full = false) {
     stopped: run.stop_reason ?? undefined,
     chain: run.chain_id ?? undefined,
     metrics: metrics(run),
-    verify: run.verify_cmd
-      ? { cmd: run.verify_cmd, exit: run.verify_exit, output: full ? run.verify_output : clip(run.verify_output, 600) }
-      : undefined,
+    verify: run.verify_cmd ? { cmd: run.verify_cmd, exit: run.verify_exit, output: verifyOutput } : undefined,
     log: join(LOGS_DIR, `${run.id}.log`),
     recent_messages: recentMessages(run.id),
     cursor: lastMessageId(run.id),
   };
 }
-
-export function nextOf(run) {
-  if (IN_PROGRESS.includes(run.status)) return {};
-  const f = runFacts(run);
-  return { next: finishedNext(f), autonomy: f.autonomy };
-}
-

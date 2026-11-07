@@ -12,7 +12,8 @@ export function nestedRun({ env = process.env, chain = ancestors() } = {}) {
   if (env.KRAKEN_PARENT_RUN) return env.KRAKEN_PARENT_RUN;
   if (!chain.length) return null;
   const marks = chain.map(() => '?').join(',');
-  const row = db.prepare(`SELECT id FROM runs WHERE status = 'running' AND (agent_pid IN (${marks}) OR pid IN (${marks})) LIMIT 1`)
+  const row = db.prepare(`SELECT id FROM runs
+    WHERE status = 'running' AND (agent_pid IN (${marks}) OR pid IN (${marks})) LIMIT 1`)
     .get(...chain, ...chain);
   return row?.id ?? null;
 }

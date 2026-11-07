@@ -3,10 +3,13 @@
 // ~/.kraken/chains/*.md); MCP clients can read them, never change them.
 //
 //   krakenmcp list                          resolved tentacles for the repo [--cwd <repo>]
-//   krakenmcp edit <name>                   open ~/.kraken/tentacles/<name>.md (created if missing), then check it
-//   krakenmcp remove <name>                 delete that file: your tentacle is gone, a built-in is back to its defaults
+// krakenmcp edit <name>                   open ~/.kraken/tentacles/<name>.md (created if missing), then check
+// it
+// krakenmcp remove <name>                 delete that file: your tentacle is gone, a built-in is back to its
+// defaults
 //   krakenmcp chain list|edit <name>|remove <name>   the same for chains in ~/.kraken/chains/
-//   krakenmcp doctor                        check installed agent CLIs (exit 1 if a tentacle needs a missing one)
+// krakenmcp doctor                        check installed agent CLIs (exit 1 if a tentacle needs a missing
+// one)
 //   krakenmcp limit [n]                     show/set max parallel runs (default 3)
 //   krakenmcp prune [--older-than 30] [--dry-run] [--worktrees]
 //        delete logs/result files and stored prompts of runs finished more than N days ago; list
@@ -19,7 +22,8 @@ import './quiet.js';
 import { resolve, join } from 'node:path';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, lstatSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { knownNames, resolveTentacle, NAME, userDir, userTentacles, tentacleTemplate, BUILTIN } from './tentacles.js';
+import { knownNames, resolveTentacle, NAME, userDir, userTentacles, tentacleTemplate, BUILTIN }
+  from './tentacles.js';
 import { PLANS_DIR, LOGS_DIR, ROOT, VERSION, db, getRun, setSetting } from './store.js';
 import { maxParallel } from './scheduler.js';
 import { knownChains, resolveChain, checkChain, userChainDir, userChains, chainTemplate, parseChainFile,
@@ -27,11 +31,15 @@ import { knownChains, resolveChain, checkChain, userChainDir, userChains, chainT
 import { pruneData } from './prune.js';
 import { checkAgents } from './agents.js';
 import { agentReport } from './stats.js';
-import { parseJson } from './util.js';
+import { parseJson, fail } from './util.js';
 
 const argv = process.argv.slice(2);
 const flag = (f) => { const i = argv.indexOf(f); if (i < 0) return false; argv.splice(i, 1); return true; };
-const opt = (f) => { const i = argv.indexOf(f); if (i < 0) return null; const v = argv[i + 1]; argv.splice(i, 2); return v; };
+const opt = (f) => {
+  const i = argv.indexOf(f);
+  if (i < 0) return null;
+  const v = argv[i + 1]; argv.splice(i, 2); return v;
+};
 
 const openIt = flag('--open'), showLog = flag('--log');
 const cwd = resolve(opt('--cwd') ?? process.cwd());
@@ -42,7 +50,7 @@ const brief = (t) => ({ ...t.settings, prompt: `${t.settings.prompt.slice(0, 60)
 
 function openInEditor(file) {
   const r = spawnSync(`${editor()} "${file}"`, { stdio: 'inherit', shell: true });
-  if (r.error || r.status) throw new Error(`the editor exited with an error${r.error ? `: ${r.error.message}` : ''}`);
+  if (r.error || r.status) fail(`the editor exited with an error${r.error ? `: ${r.error.message}` : ''}`);
 }
 
 // ---- the developer's settings files: tentacles and chains share edit and remove ----
@@ -51,7 +59,8 @@ function chainInfo(chainName) {
   const c = resolveChain(chainName), k = checkChain(c, cwd);
   return { name: chainName, builtin: c.builtin, description: c.description, user_file: c.user_file,
     max_fix_rounds: c.max_fix_rounds,
-    stages: k.stages.map((s) => ({ tentacle: s.tentacle, kind: s.kind, autonomy: `${s.autonomy} (${s.autonomy_source})`,
+    stages: k.stages.map((s) => ({ tentacle: s.tentacle, kind: s.kind,
+      autonomy: `${s.autonomy} (${s.autonomy_source})`,
       stage_settings: Object.keys(s.layer).length ? s.layer : undefined })),
     sources: c.sources, notes: c.notes, problems: k.problems.length ? k.problems : undefined };
 }
@@ -59,7 +68,8 @@ function chainInfo(chainName) {
 // check(name, file) -> { problem } or the fields to print for a good file.
 const FILES = {
   tentacle: {
-    dir: userDir, template: tentacleTemplate, builtin: (n) => !!BUILTIN[n], reset: 'the built-in settings and prompt',
+    dir: userDir, template: tentacleTemplate, builtin: (n) => !!BUILTIN[n],
+    reset: 'the built-in settings and prompt',
     check(n, file) {
       const problem = userTentacles().problems.find((p) => p.startsWith(file));
       if (problem) return { problem: problem.slice(file.length + 2) };
@@ -79,7 +89,7 @@ const FILES = {
 
 function checkName(kind, verb, n) {
   const usage = kind === 'chain' ? `krakenmcp chain ${verb}` : `krakenmcp ${verb}`;
-  if (!n || !NAME.test(n)) throw new Error(`usage: ${usage} <name> (lowercase letters, digits, - or _)`);
+  if (!n || !NAME.test(n)) fail(`usage: ${usage} <name> (lowercase letters, digits, - or _)`);
 }
 
 // Open the developer's file for <name> (created from a template when missing), then check it.
@@ -92,7 +102,8 @@ function editFile(kind, n) {
   const checked = f.check(n, file);
   if (checked.problem) { out({ file, problem: checked.problem }); process.exitCode = 1; return; }
   out({ file, created: created || undefined,
-    note: editor() ? undefined : 'Set $VISUAL or $EDITOR to open it automatically; edit the file, then run this again to check it.',
+    note: editor() ? undefined
+      : 'Set $VISUAL or $EDITOR to open it automatically; edit the file, then run this again to check it.',
     ...checked });
 }
 
@@ -101,7 +112,8 @@ function removeFile(kind, n) {
   checkName(kind, 'remove', n);
   const f = FILES[kind], file = join(f.dir(), `${n}.md`);
   if (!existsSync(file)) {
-    throw new Error(f.builtin(n) ? `${n} has no changes to remove; it is already the built-in` : `no ${kind} ${n} (no ${file})`);
+    fail(f.builtin(n) ? `${n} has no changes to remove; it is already the built-in`
+      : `no ${kind} ${n} (no ${file})`);
   }
   rmSync(file);
   out({ removed: file, note: f.builtin(n) ? `${n} is back to ${f.reset}` : `${n} is gone` });
@@ -119,16 +131,19 @@ function listTentacles() {
 function chainCommand(sub, chainName) {
   if (sub === 'edit') return editFile('chain', chainName);
   if (sub === 'remove') return removeFile('chain', chainName);
-  if (sub !== 'list' && sub !== undefined) throw new Error('usage: krakenmcp chain list|edit <name>|remove <name>');
+  if (sub !== 'list' && sub !== undefined) fail('usage: krakenmcp chain list|edit <name>|remove <name>');
   const problems = userChains().problems;
-  const chains = knownChains().map((n) => { try { return chainInfo(n); } catch (e) { return { name: n, error: e.message }; } });
+  const safeInfo = (n) => {
+    try { return chainInfo(n); } catch (e) { return { name: n, error: e.message }; }
+  };
+  const chains = knownChains().map(safeInfo);
   out({ dir: userChainDir(), chains, problems: problems.length ? problems : undefined });
 }
 
 function limit(n) {
   if (n !== undefined) {
     const v = Number(n);
-    if (!Number.isInteger(v) || v < 1 || v > 32) throw new Error('limit must be an integer from 1 to 32');
+    if (!Number.isInteger(v) || v < 1 || v > 32) fail('limit must be an integer from 1 to 32');
     setSetting('max_parallel', v);
   }
   out({ max_parallel: maxParallel() });
@@ -136,7 +151,7 @@ function limit(n) {
 
 function prune() {
   const days = Number(opt('--older-than') ?? 30);
-  if (!(days >= 0)) throw new Error('--older-than takes a number of days');
+  if (!(days >= 0)) fail('--older-than takes a number of days');
   out(pruneData({ olderThanDays: days, dryRun: flag('--dry-run'), worktrees: flag('--worktrees') }));
 }
 
@@ -145,8 +160,9 @@ function doctor() {
   const rep = agentReport(cwd, checkAgents);
   for (const a of rep.agents) {
     const used = a.used_by.length ? `  (used by ${a.used_by.join(', ')})` : '';
+    const problem = a.problem ? `  ${a.problem}` : '';
     console.log(a.installed
-      ? `ok       ${a.name.padEnd(9)} ${a.version ?? '?'}  ${a.path}${used}${a.problem ? `  ${a.problem}` : ''}`
+      ? `ok       ${a.name.padEnd(9)} ${a.version ?? '?'}  ${a.path}${used}${problem}`
       : `missing  ${a.name.padEnd(9)} install: ${a.install_docs}${used}`);
   }
   for (const p of rep.problems) console.log(`problem  ${p}`);
@@ -156,21 +172,24 @@ function doctor() {
 
 function show(id) {
   const run = id ? getRun(id)
-    : db.prepare("SELECT * FROM runs WHERE result IS NOT NULL AND result != '' ORDER BY created_at DESC LIMIT 1").get();
-  if (!run) throw new Error(id ? `no run ${id}` : 'no run has a result yet');
+    : db.prepare(`SELECT * FROM runs WHERE result IS NOT NULL AND result != ''
+                  ORDER BY created_at DESC LIMIT 1`).get();
+  if (!run) fail(id ? `no run ${id}` : 'no run has a result yet');
   const file = join(PLANS_DIR, `${run.id}.md`), log = join(LOGS_DIR, `${run.id}.log`);
   if (showLog) {
-    if (!existsSync(log)) throw new Error(`run ${run.id} has no log (pruned, or never started)`);
+    if (!existsSync(log)) fail(`run ${run.id} has no log (pruned, or never started)`);
     process.stdout.write(readFileSync(log, 'utf8'));
   } else if (openIt) {
-    if (!existsSync(file)) throw new Error(`run ${run.id} has no result file; use krakenmcp show ${run.id}`);
+    if (!existsSync(file)) fail(`run ${run.id} has no result file; use krakenmcp show ${run.id}`);
     const r = editor() ? spawnSync(`${editor()} "${file}"`, { stdio: 'inherit', shell: true })
       : spawnSync(process.platform === 'darwin' ? 'open' : 'xdg-open', [file], { stdio: 'inherit' });
-    if (r.error || (editor() && r.status)) throw new Error(`could not open ${file}${r.error ? `: ${r.error.message}` : ''}`);
+    const why = r.error ? `: ${r.error.message}` : '';
+    if (r.error || (editor() && r.status)) fail(`could not open ${file}${why}`);
   } else {
     const body = existsSync(file) ? readFileSync(file, 'utf8') : run.result;
     const verdict = run.verdict ? `  ${run.verdict}` : '';
-    console.log(`# ${run.id}  ${run.tentacle}  ${run.status}${verdict}  ${run.agent} ${run.model ?? ''}`.trimEnd());
+    const header = `# ${run.id}  ${run.tentacle}  ${run.status}${verdict}  ${run.agent} ${run.model ?? ''}`;
+    console.log(header.trimEnd());
     console.log(`# task: ${run.task.split('\n')[0].slice(0, 120)}`);
     if (existsSync(file)) console.log(`# file: ${file}`);
     console.log(`\n${body ?? `(no result yet: ${run.error ?? run.status})`}`);
@@ -189,19 +208,23 @@ function updateKraken() {
   const gPkg = gRoot ? join(real(gRoot) ?? gRoot, 'krakenmcp') : null;
   let linked = false;
   try { linked = !!gPkg && lstatSync(gPkg).isSymbolicLink(); } catch { /* no global package */ }
-  if (linked) throw new Error('this is a linked or development install; update it with git, not npm');
+  if (linked) fail('this is a linked or development install; update it with git, not npm');
   if (!gPkg || real(gPkg) !== (real(ROOT) ?? ROOT)) {
-    throw new Error(existsSync(join(ROOT, '.git'))
+    fail(existsSync(join(ROOT, '.git'))
       ? 'you are running a local checkout; update it with "git pull"'
-      : `not installed under the npm global root${gRoot ? ` (${gRoot})` : ''}; update it however you installed it`);
+      : `not installed under the npm global root${gRoot ? ` (${gRoot})` : ''}; ` +
+        'update it however you installed it');
   }
   // npm's output goes to stderr so stdout stays the JSON other commands print.
-  const r = spawnSync('npm', ['install', '-g', 'github:gateniomer/kraken@main'], { stdio: ['inherit', process.stderr, 'inherit'] });
-  if (r.error) throw new Error(`could not run npm: ${r.error.message}`);
-  if (r.status) throw new Error(`npm install exited with status ${r.status}`);
-  const pkg = existsSync(join(gPkg, 'package.json')) ? readFileSync(join(gPkg, 'package.json'), 'utf8') : null;
+  const r = spawnSync('npm', ['install', '-g', 'github:gateniomer/kraken@main'],
+    { stdio: ['inherit', process.stderr, 'inherit'] });
+  if (r.error) fail(`could not run npm: ${r.error.message}`);
+  if (r.status) fail(`npm install exited with status ${r.status}`);
+  const pkgFile = join(gPkg, 'package.json');
+  const pkg = existsSync(pkgFile) ? readFileSync(pkgFile, 'utf8') : null;
   const to = parseJson(pkg, {}).version ?? VERSION;
-  out({ updated: to !== VERSION, from: VERSION, to, note: 'restart your MCP client: the server starts with the client' });
+  const note = 'restart your MCP client: the server starts with the client';
+  out({ updated: to !== VERSION, from: VERSION, to, note });
 }
 
 const COMMANDS = {
@@ -220,7 +243,8 @@ try {
   const run = COMMANDS[cmd];
   if (run) run();
   else {
-    console.log(`usage: krakenmcp doctor|show|list|edit|remove|chain|limit|prune|update|version [args] [--cwd <repo>]`);
+    const commands = 'doctor|show|list|edit|remove|chain|limit|prune|update|version';
+    console.log(`usage: krakenmcp ${commands} [args] [--cwd <repo>]`);
     process.exit(cmd ? 1 : 0);
   }
 } catch (e) {

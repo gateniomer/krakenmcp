@@ -31,7 +31,8 @@ export const runShell = (cmd, opts) => spawnSync(cmd, { shell: true, ...opts });
 // Parent pid chain of `pid`, nearest first.
 export function ancestors(pid = process.pid, max = 32) {
   const parentOf = (p) => {
-    try { return Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(p)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()); }
+    const opts = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] };
+    try { return Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(p)], opts).trim()); }
     catch { return 0; }
   };
   const chain = [];

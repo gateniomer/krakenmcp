@@ -46,7 +46,10 @@ export function chainFeed(c, since = 0, all = false) {
   const rows = all ? chainMessagesSinceAll(c.id, since) : chainMessagesSince(c.id, since, 200);
   const names = stageNames(c), runs = new Map();
   const labelOf = (rid) => {
-    if (!runs.has(rid)) { const run = getRun(rid); runs.set(rid, run ? runLabel(run, names.get(rid)) : 'run'); }
+    if (!runs.has(rid)) {
+      const run = getRun(rid);
+      runs.set(rid, run ? runLabel(run, names.get(rid)) : 'run');
+    }
     return runs.get(rid);
   };
   const showId = c.current_run ?? c.write_run ?? rows.at(-1)?.run_id ?? c.id;
@@ -66,7 +69,8 @@ export function chainSummary(c) {
   const cost = chainRuns(c.id).reduce((a, r) => a + (r.cost_usd ?? 0), 0) || undefined;
   const opts = json(c.options, {});
   const write = c.write_run ? getRun(c.write_run) : null;
-  const current = pause ? (pause.reason === 'approval' ? `paused before ${pause.next_stage}` : 'paused: verify failed')
+  const paused = pause?.reason === 'approval' ? `paused before ${pause.next_stage}` : 'paused: verify failed';
+  const current = pause ? paused
     : status === 'waiting' ? 'question for the developer'
       : cur ? `${cur.tentacle} › ${currentActivity(rows, cur.status)}` : (c.stage ?? 'starting');
   const identity = `chain ${c.name} › stage ${c.stage}`;
@@ -94,8 +98,13 @@ function chainNext(c, status, cur, pause, stages) {
     return `ask: show the ${pause.after} result; ask whether to continue to ${pause.next_stage}; ` +
       `then resume("${c.id}", their reply), or cancel("${c.id}")`;
   }
-  if (pause?.reason === 'verify_failed') return `stop: show the verify output; resume("${c.id}", fix instruction), or cancel("${c.id}")`;
-  if (status === 'waiting') return `ask: put the question to the developer, then resume("${cur.id}", their reply); the chain continues by itself`;
+  if (pause?.reason === 'verify_failed') {
+    return `stop: show the verify output; resume("${c.id}", fix instruction), or cancel("${c.id}")`;
+  }
+  if (status === 'waiting') {
+    return `ask: put the question to the developer, then resume("${cur.id}", their reply); ` +
+      'the chain continues by itself';
+  }
   if (c.status === 'failed') return STOP_NEXT;
   if (c.status === 'cancelled') return 'stop: tell the developer it was cancelled and wait';
   if (c.status !== 'done') return undefined;
@@ -124,8 +133,8 @@ export function describeChain(c, full = false, live) {
     stage_index: `${Math.min(c.stage_index + 1, stages.length)} of ${stages.length}`,
     task: c.task.slice(0, 200),
     fix_rounds: `${c.fix_rounds} of ${opts.max_fix_rounds}`,
-    stages: stages.map((s) => ({ tentacle: s.tentacle, kind: s.kind, autonomy: s.autonomy, run: latest[s.tentacle],
-      status: latest[s.tentacle] ? getRun(latest[s.tentacle])?.status : undefined })),
+    stages: stages.map((s) => ({ tentacle: s.tentacle, kind: s.kind, autonomy: s.autonomy,
+      run: latest[s.tentacle], status: latest[s.tentacle] && getRun(latest[s.tentacle]).status })),
     runs: latest,
     branch_run: c.write_run ?? undefined,
     current: cur ? describeBrief(cur, full) : undefined,
@@ -166,7 +175,8 @@ export function chainCard(c, sum = chainSummary(c)) {
   const opts = json(c.options, {});
   const write = c.write_run ? getRun(c.write_run) : null;
   const fix = opts.max_fix_rounds ? [`fix ${c.fix_rounds}/${opts.max_fix_rounds}`] : [];
-  const shown = pause ? (pause.reason === 'approval' ? '◐ paused' : '◐ paused: verify failed') : statusText(status);
+  const badge = pause?.reason === 'approval' ? '◐ paused' : '◐ paused: verify failed';
+  const shown = pause ? badge : statusText(status);
   const stage = c.stage === 'finished' ? stages.at(-1)?.tentacle ?? '' : c.stage;
   return box(`🦑 chain ${c.name} › ${stage}`, shown, [
     ['chain', c.id],
@@ -184,6 +194,7 @@ export function chainCard(c, sum = chainSummary(c)) {
 
 function describeBrief(run, full) {
   const d = describe(run, full);
-  return { id: d.id, tentacle: d.tentacle, status: d.status, verdict: d.verdict, error: d.error, stopped: d.stopped,
+  return { id: d.id, tentacle: d.tentacle, status: d.status, verdict: d.verdict, error: d.error,
+    stopped: d.stopped,
     recent: d.recent_messages.slice(-2).map((m) => m.body.slice(0, 160)), cost_usd: d.metrics.cost_usd };
 }

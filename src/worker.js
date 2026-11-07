@@ -2,7 +2,8 @@
 // Started detached by the MCP server so long runs never block a tool call
 // and survive the server restarting.
 //
-// Once a second it checks the database: cancel() sets cancel_requested, and the live cost/tokens are saved and checked against the run's
+// Once a second it checks the database: cancel() sets cancel_requested, and the live cost/tokens are saved
+// and checked against the run's
 // max_cost_usd / max_tokens. Stopping kills the agent's whole process tree.
 import { spawn } from 'node:child_process';
 import { createWriteStream, writeFileSync } from 'node:fs';
@@ -19,7 +20,8 @@ const run = getRun(runId);
 if (!run) { console.error(`no run ${runId}`); process.exit(1); }
 if (run.status === 'cancelled') { pump(); process.exit(0); } // cancelled while queued: free the slot
 
-const say = (kind, body, sender = 'kraken') => addMessage({ session: run.session, run_id: runId, sender, kind, body });
+const say = (kind, body, sender = 'kraken') =>
+  addMessage({ session: run.session, run_id: runId, sender, kind, body });
 
 // Anything that fails before the agent runs ends the run as failed (never leaves it queued/running).
 function failEarly(message) {
@@ -37,7 +39,8 @@ const lastMessageFile = join(LOGS_DIR, `${runId}.last.txt`);
 // the agent's read-only or write mode, so the prompt cannot widen permissions.
 // Set when the run was created by resume/answer.
 const resumeSession = run.native_session ?? null;
-const args = agent.build(run.access, { prompt: run.prompt, model: run.model, effort: run.effort, lastMessageFile, resumeSession });
+const args = agent.build(run.access,
+  { prompt: run.prompt, model: run.model, effort: run.effort, lastMessageFile, resumeSession });
 // Agents that can enforce a spend cap themselves get it too (Kraken's own check is per second).
 if (limits.max_cost_usd && agent.budgetArgs) args.unshift(...agent.budgetArgs(limits.max_cost_usd));
 const log = createWriteStream(join(LOGS_DIR, `${runId}.log`));
@@ -48,7 +51,9 @@ const child = spawn(agent.path, args, { cwd: run.workdir, stdio: ['ignore', 'pip
   env: { ...process.env, KRAKEN_PARENT_RUN: runId }, detached: true });
 child.on('error', (e) => failEarly(`could not start ${run.agent}: ${e.message}`));
 updateRun(runId, { status: 'running', pid: process.pid, agent_pid: child.pid ?? null, started_at: nowIso() });
-say('progress', `${resumeSession ? 'resumed' : 'started'} ${run.tentacle}: ${run.agent} ${run.model ?? '(default)'}${run.effort ? `#${run.effort}` : ''}`);
+const effortTag = run.effort ? `#${run.effort}` : '';
+say('progress', `${resumeSession ? 'resumed' : 'started'} ${run.tentacle}: ` +
+  `${run.agent} ${run.model ?? '(default)'}${effortTag}`);
 
 let stdout = '', buf = '';
 child.stdout.on('data', (d) => {
@@ -83,12 +88,15 @@ function watch() {
   lastParsedLength = stdout.length;
   let p;
   try { p = agent.parse(stdout, lastMessageFile, { resumeSession }); } catch { return; }
-  updateRun(runId, { tokens: p.tokens ? JSON.stringify(p.tokens) : null, cost_usd: p.cost ?? null }); // live metrics
+  // Live metrics, so status shows them while the run goes.
+  updateRun(runId, { tokens: p.tokens ? JSON.stringify(p.tokens) : null, cost_usd: p.cost ?? null });
   if (limits.max_cost_usd && p.cost > limits.max_cost_usd) {
-    return stop('over_budget', `cost $${p.cost.toFixed(4)} passed max_cost_usd $${limits.max_cost_usd}, stopping agent`);
+    const why = `cost $${p.cost.toFixed(4)} passed max_cost_usd $${limits.max_cost_usd}`;
+    return stop('over_budget', `${why}, stopping agent`);
   }
   if (limits.max_tokens && usedTokens(p.tokens) > limits.max_tokens) {
-    return stop('over_budget', `${usedTokens(p.tokens)} tokens passed max_tokens ${limits.max_tokens}, stopping agent`);
+    const why = `${usedTokens(p.tokens)} tokens passed max_tokens ${limits.max_tokens}`;
+    return stop('over_budget', `${why}, stopping agent`);
   }
 }
 const watcher = setInterval(watch, 1000);
@@ -139,12 +147,14 @@ function commitWork() {
   const verify = runVerify();
   const diff = diffStat();
   const markers = config.sync_base && run.branch ? conflictMarkers() : [];
-  const markerError = markers.length ? `conflict markers are still in: ${markers.join(', ')}; the merge is not finished` : null;
+  const markerError = markers.length
+    ? `conflict markers are still in: ${markers.join(', ')}; the merge is not finished` : null;
   if (run.branch && diff && !markerError) {
-    const refs = [`run ${runId}`, run.plan_id && `plan ${run.plan_id}`, run.resumed_from && `resumes ${run.resumed_from}`];
+    const refs = [`run ${runId}`, run.plan_id && `plan ${run.plan_id}`,
+      run.resumed_from && `resumes ${run.resumed_from}`].filter(Boolean).join(', ');
     try {
       git('-c', 'user.name=Kraken', '-c', 'user.email=kraken@localhost', 'commit', '-q',
-        '-m', `kraken(${run.tentacle}/${run.agent}): ${run.task.slice(0, 64)}`, '-m', refs.filter(Boolean).join(', '));
+        '-m', `kraken(${run.tentacle}/${run.agent}): ${run.task.slice(0, 64)}`, '-m', refs);
     } catch { /* nothing to commit */ }
     if (config.sync_base && !hasMergeHead()) {
       db.prepare('UPDATE runs SET base_sha = ? WHERE branch = ?').run(config.sync_base, run.branch);
@@ -173,19 +183,24 @@ const VERDICT = /VERDICT:\s*\**\s*(approve|changes_requested)/i;
 
 function finish(code, duration_ms) {
   const p = agent.parse(stdout, lastMessageFile, { resumeSession });
-  if (!stopReason && p.overBudget) { stopReason = 'over_budget'; stopDetail = `${run.agent} stopped at its --max-budget-usd cap`; }
+  if (!stopReason && p.overBudget) {
+    stopReason = 'over_budget';
+    stopDetail = `${run.agent} stopped at its --max-budget-usd cap`;
+  }
   const ok = !!(code === 0 && p.text && !stopReason);
   const question = ok ? p.text.match(QUESTION)?.[1]?.trim() ?? null : null;
   const isReview = run.tentacle === 'review' || config.needs_diff;
   const verdict = ok && isReview ? p.text.match(VERDICT)?.[1]?.toLowerCase() ?? null : null;
   if (ok && run.access === 'read') writeFileSync(join(PLANS_DIR, `${runId}.md`), `${p.text}\n`);
   // A run that stopped to ask a question keeps its uncommitted work for the resumed run.
-  const { verify = null, diff = null, markerError = null } = ok && run.access === 'write' && !question ? commitWork() : {};
+  const work = ok && run.access === 'write' && !question ? commitWork() : {};
+  const { verify = null, diff = null, markerError = null } = work;
   const status = finalStatus({ ok, question, verify, markerError });
   updateRun(runId, {
     status, result: p.text || null, question, verdict,
     native_session: p.nativeSession ?? run.native_session,
-    tokens: json(p.tokens), cost_usd: p.cost, steps: p.steps, tool_calls: json(p.toolCalls), diff_stat: json(diff),
+    tokens: json(p.tokens), cost_usd: p.cost, steps: p.steps,
+    tool_calls: json(p.toolCalls), diff_stat: json(diff),
     verify_exit: verify?.exit ?? null, verify_output: verify?.output ?? null,
     exit_code: code, duration_ms,
     stop_reason: stopReason === 'over_budget' ? stopDetail : null,
