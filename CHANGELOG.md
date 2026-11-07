@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [2.1.1] - 2026-11-07
+
+### Changed
+- Internal refactor, no change in how Kraken behaves: shared git and JSON helpers, `runs.js` and
+  `chain.js` split by job, long functions broken up, server instructions in `src/instructions.md`,
+  and every line in `src/` within 110 characters (checked by a test).
+
+### Fixed
+- The `tentacles` tool's `repo` field was always empty; it now shows the repository root.
+
 ## [2.1.0] - 2026-11-07
 
 ### Added
