@@ -2,6 +2,10 @@ Kraken delegates work to other headless coding agents. Each action is a "tentacl
 (the agent the developer talks to) that sends work to them.
 Runs are asynchronous: every start tool returns a run_id at once. Then call status the way its `next` says
 (run_id, wait_seconds, since: 0), and on each later call pass the cursor it returned as since. Do not poll faster.
+Each status call is a full turn of yours and counts against the developer's usage. If you can run a shell command
+in the background and are told when it exits (e.g. Claude Code's run_in_background), start
+`krakenmcp wait <run_id>` (works for chain ids too) that way instead of polling, say in one line that you are
+waiting, and when it exits call status once with the last cursor; then continue exactly as below.
 Cards: every start tool, resume and status reply carries "card", a small bordered box. Show it to the developer
 as-is in a code block when you call a tentacle, and when a run or chain ends, pauses or asks a question.
 While it runs, follow the status reply's `next`: when it says the developer sees live progress (a status line

@@ -83,6 +83,13 @@ While `status` waits it sends MCP progress notifications if the client passes a 
 status line changes, and at least every 5 seconds so its clock moves. Each start tool's `next` says how long
 to wait (`krakenmcp poll`, default 25 seconds).
 
+Every status call is a full turn of the head, and each one counts against the developer's usage. A head
+that can run a shell command in the background and be told when it exits (for example Claude Code's
+`run_in_background`) starts `krakenmcp wait <run_id>` instead of polling, then calls `status` once
+when it exits. The instructions the head gets on connect say so. `wait` returns when a run is no
+longer `queued` or `running`, or a chain is no longer `running` or `cancelling`, so it also returns
+on a question or a pause.
+
 Every finished run and chain returns a `next`, the one step after it:
 
 - `ask: …` show the result, suggest exactly that step, then wait for the developer.
@@ -224,6 +231,7 @@ head to show the merge preview.
 krakenmcp                      # start the MCP server (what MCP clients run)
 krakenmcp doctor               # installed agents and versions; exits 1 if a tentacle needs a missing one
 krakenmcp show [run_id]        # a run's full result (default: the newest); --open in $VISUAL/$EDITOR, --log raw output
+krakenmcp wait <id> [--timeout <s>]  # block until a run or chain needs attention; prints its status (exit 2 on timeout)
 krakenmcp list                 # resolved tentacles for the current repo
 krakenmcp edit <name>          # open ~/.kraken/tentacles/<name>.md in $VISUAL/$EDITOR (created if missing), then check it
 krakenmcp remove <name>        # delete that file: your tentacle is gone, a built-in is back to its defaults

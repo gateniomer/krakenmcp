@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [2.2.0] - 2026-11-09
+
+### Added
+- `krakenmcp wait <run_id|chain_id> [--timeout <seconds>]` blocks until a run or chain needs the
+  head (finished, failed, a question or a pause), prints its status as JSON and exits 0, or exits 2
+  on timeout.
+- The instructions the head gets on connect tell a head that can run background commands with
+  exit notifications (Claude Code's `run_in_background`) to start `krakenmcp wait` instead of
+  polling `status`, then call `status` once. Every status poll was a full head turn that counted
+  against the developer's usage limit; a 20-minute run polled at 55 s used about 20 turns.
+
 ## [2.1.3] - 2026-11-07
 
 ### Added

@@ -208,6 +208,7 @@ the merge checks.
 ```sh
 krakenmcp limit 3           # how many runs may work at once
 krakenmcp poll 25           # seconds each status check waits; longer = fewer tool calls in the chat
+krakenmcp wait <run_id>     # block until a run or chain needs attention (heads run it in the background)
 krakenmcp prune             # delete old logs and results
 ```
 

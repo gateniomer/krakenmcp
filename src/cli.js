@@ -18,6 +18,9 @@
 //        unmerged worktrees (--worktrees also discards the stale ones)
 //   krakenmcp show [run_id] [--open|--log]  a run's full result (default: the newest run with one);
 //        --open opens the result file in $VISUAL / $EDITOR, --log prints the raw agent output
+//   krakenmcp wait <run_id|chain_id> [--timeout <seconds>]  block until the run or chain stops being busy
+//        (done, failed, waiting on a question or pause, ...), print its status and exit 0; exit 2 on timeout.
+//        A head that can run commands in the background starts this instead of polling status.
 //   krakenmcp update                        reinstall a global git install and print the old -> new version
 //   krakenmcp --version                     print the installed version
 import './quiet.js';
@@ -26,7 +29,8 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, lstatSync, 
 import { spawnSync } from 'node:child_process';
 import { knownNames, resolveTentacle, NAME, userDir, userTentacles, tentacleTemplate, BUILTIN }
   from './tentacles.js';
-import { PLANS_DIR, LOGS_DIR, ROOT, VERSION, INSTALL_SPEC, db, getRun, setSetting } from './store.js';
+import { PLANS_DIR, LOGS_DIR, ROOT, VERSION, INSTALL_SPEC, IN_PROGRESS, db, getRun, getChain, setSetting }
+  from './store.js';
 import { maxParallel, pollSeconds } from './scheduler.js';
 import { knownChains, resolveChain, checkChain, userChainDir, userChains, chainTemplate, parseChainFile,
   BUILTIN_CHAINS } from './chains.js';
@@ -44,6 +48,7 @@ const opt = (f) => {
 };
 
 const openIt = flag('--open'), showLog = flag('--log');
+const timeoutArg = opt('--timeout');
 const cwd = resolve(opt('--cwd') ?? process.cwd());
 const [cmd, name, arg2] = argv;
 const out = (o) => console.log(JSON.stringify(o, null, 2));
@@ -208,6 +213,34 @@ function show(id) {
   }
 }
 
+// Busy states: a run is queued or running; a chain is running or cancelling. Anything else
+// (finished, failed, waiting on a question or a pause) needs the head's attention.
+const CHAIN_BUSY = ['running', 'cancelling'];
+const WAIT_TICK_MS = 1000;
+
+async function waitFor(id) {
+  if (!id) fail('usage: krakenmcp wait <run_id|chain_id> [--timeout <seconds>]');
+  const timeout = timeoutArg === null ? 0 : Number(timeoutArg);
+  if (!(timeout >= 0)) fail('--timeout takes a number of seconds (0 = no limit)');
+  const isChain = id.startsWith('chain_');
+  const read = () => (isChain ? getChain(id) : getRun(id));
+  const busy = (row) => (isChain ? CHAIN_BUSY : IN_PROGRESS).includes(row.status);
+  const deadline = timeout ? Date.now() + timeout * 1000 : Infinity;
+  let row = read();
+  if (!row) fail(`no ${isChain ? 'chain' : 'run'} ${id}`);
+  while (busy(row) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, Math.min(WAIT_TICK_MS, Math.max(0, deadline - Date.now()))));
+    row = read() ?? row;
+  }
+  const done = !busy(row);
+  const key = isChain ? 'chain_id' : 'run_id';
+  out({ [key]: id, status: row.status, finished: done,
+    next: done
+      ? `call status once with run_id "${id}" (since: your last cursor) for the result, card and next step`
+      : `still ${row.status} after ${timeout}s; run krakenmcp wait ${id} again or call status` });
+  if (!done) process.exitCode = 2;
+}
+
 const real = (p) => { try { return realpathSync(p); } catch { return null; } };
 const npmGlobalRoot = () => {
   const r = spawnSync('npm', ['root', '-g'], { encoding: 'utf8' });
@@ -249,14 +282,15 @@ const COMMANDS = {
   prune,
   doctor,
   show: () => show(name),
+  wait: () => waitFor(name),
   update: updateKraken,
 };
 
 try {
   const run = COMMANDS[cmd];
-  if (run) run();
+  if (run) await run();
   else {
-    const commands = 'doctor|show|list|edit|remove|chain|limit|poll|prune|update|version';
+    const commands = 'doctor|show|wait|list|edit|remove|chain|limit|poll|prune|update|version';
     console.log(`usage: krakenmcp ${commands} [args] [--cwd <repo>]`);
     process.exit(cmd ? 1 : 0);
   }
