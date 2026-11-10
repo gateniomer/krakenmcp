@@ -149,3 +149,30 @@ test('session totals and history reflect the outcomes above', async () => {
   assert.equal(s.runs.length, s.total.runs);
   assert.deepEqual(s.attention, { in_progress: [], waiting: [], ready_to_merge: [] }, 'everything above was merged or discarded');
 });
+
+test('review base: reviews every change since a commit, committed or not', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const git = (...args) => execFileSync('git', args, { cwd: h.repo, encoding: 'utf8' }).trim();
+  const base = git('rev-parse', 'HEAD');
+  writeFileSync(join(h.repo, 'since-base.js'), 'export const sinceBase = 1;\n');
+  git('add', 'since-base.js');
+  git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'since base');
+  const r = await k.wait((await k.call('review', { base, cwd: h.repo })).run_id);
+  assert.equal(r.status, 'done');
+  const prompt = h.row(r.id).prompt;
+  assert.ok(prompt.includes('+export const sinceBase'), 'the committed change is in the diff');
+  assert.match(h.row(r.id).task, /since /);
+  await assert.rejects(k.call('review', { base: 'not-a-commit', cwd: h.repo }), /not a commit/);
+});
+
+test('execute continue_run: a later stage on the same branch, fresh session, new label', async () => {
+  const first = await k.wait((await k.call('execute', { plan_id: planRun.id, cwd: h.repo })).run_id);
+  assert.equal(first.status, 'done');
+  const next = await k.wait((await k.call('execute', { plan_id: planRun.id, continue_run: first.id })).run_id);
+  assert.equal(next.status, 'done');
+  assert.equal(next.branch, first.branch);
+  assert.equal(next.workdir, first.workdir);
+  assert.equal(h.row(next.id).base_sha, h.row(first.id).base_sha);
+  assert.notEqual(next.id, first.id);
+  await assert.rejects(k.call('execute', { plan_id: planRun.id, continue_run: execRun.id }), /already merged/);
+});

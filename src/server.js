@@ -64,22 +64,25 @@ server.tool('execute', {
   input: { plan_id: str({ description: 'A finished plan run' }),
     plan_file: str({ description: 'Plan file, relative to cwd (instead of plan_id)' }),
     section: str({ description: 'Only this heading of plan_file (case-insensitive substring)' }),
+    continue_run: str({ description: 'Continue on this earlier execute run\'s branch and worktree, with a ' +
+      'fresh agent session (one stage at a time without merging in between)' }),
     cwd: CWD, ...OVERRIDES,
     verify: str({ description: 'Command to run once at the end, e.g. "npm test"' }),
     stage_verify: str({ description: 'Cheaper command to run after each stage' }), session: SESSION },
-}, async ({ plan_id, plan_file, section, cwd, verify, stage_verify, session, ...a }) =>
+}, async ({ plan_id, plan_file, section, continue_run, cwd, verify, stage_verify, session, ...a }) =>
   attempt(() => {
     if (!plan_id && !plan_file) throw new Error('pass plan_id or plan_file');
-    return startRun('execute', { plan_id, plan_file, section, cwd, session,
+    return startRun('execute', { plan_id, plan_file, section, continue_run, cwd, session,
       overrides: { ...overridesOf(a), verify, stage_verify } });
   }));
 
 server.tool('review', {
-  description: 'Review a run\'s branch (with its plan), or uncommitted changes when run_id is omitted. ' +
-    'Starts with VERDICT: approve | changes_requested.',
-  input: { run_id: str(), focus: str(), context_runs: CONTEXT_RUNS, cwd: CWD, ...OVERRIDES,
-    session: SESSION },
-}, async (a) => start('review', a, { input: a.focus, target_run: a.run_id }));
+  description: 'Review a run\'s branch (with its plan), everything since a commit (base), or uncommitted ' +
+    'changes when neither is given. Starts with VERDICT: approve | changes_requested.',
+  input: { run_id: str(), base: str({ description: 'Review all changes in cwd since this commit, committed ' +
+    'or not (e.g. "HEAD~3" or a sha), instead of only uncommitted changes' }),
+    focus: str(), context_runs: CONTEXT_RUNS, cwd: CWD, ...OVERRIDES, session: SESSION },
+}, async (a) => start('review', a, { input: a.focus, target_run: a.run_id, base: a.base }));
 
 server.tool('explain', {
   description: 'One-page map of how part of the codebase works (read-only).',

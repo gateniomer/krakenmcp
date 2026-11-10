@@ -25,6 +25,8 @@ your own words and ask its open questions. Then plan(task + the developer's answ
 execute(plan_id) (on branch kraken/<run_id> in a separate worktree; when the plan already exists as a file
 in the repo, execute(plan_file, section?) instead, which skips the plan run), review(run_id) (VERDICT: approve |
 changes_requested), then merge. To fix things on the same branch use resume(run_id, instruction).
+For the next stage of a plan on the same branch, prefer execute(plan_file, section, continue_run: run_id)
+(fresh session) over resume. To review work done directly in the checkout, use review(base: <commit>).
 merge(run_id) returns a preview. Show it to the developer and call merge(run_id, confirm) only after
 they explicitly approve. If merge reports auto: true it already landed (the review tentacle's autonomy is auto); tell the developer.
 discard(run_id) throws the work away: only with the developer's approval, always.

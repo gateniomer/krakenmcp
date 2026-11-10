@@ -247,7 +247,17 @@ const withUntracked = (diff, untracked, base) =>
 
 // Diff for review: a Kraken run's changes (committed on its branch + anything uncommitted in its
 // worktree), or the uncommitted changes in `dir`.
-export function reviewInput(targetId, dir) {
+export function reviewInput(targetId, dir, base) {
+  if (targetId && base) fail('pass run_id or base, not both');
+  if (base) {
+    if (tryGit(dir, 'rev-parse', '--verify', '--quiet', `${base}^{commit}`) === null) {
+      fail(`base ${base} is not a commit in ${dir}`);
+    }
+    const diff = gitIn(dir, 'diff', base);
+    const untracked = tryGit(dir, 'ls-files', '--others', '--exclude-standard');
+    if (!diff && !untracked) fail(`no changes in ${dir} since ${base}`);
+    return { target: null, workdir: dir, cwd: dir, diff: withUntracked(diff, untracked, base) };
+  }
   if (!targetId) {
     const diff = gitIn(dir, 'diff', 'HEAD');
     const untracked = tryGit(dir, 'ls-files', '--others', '--exclude-standard');

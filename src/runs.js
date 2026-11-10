@@ -2,7 +2,7 @@
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { resolveAgent, AGENTS } from './agents.js';
-import { WORKTREES_DIR, newId, insertRun, getRun } from './store.js';
+import { WORKTREES_DIR, IN_PROGRESS, newId, insertRun, getRun } from './store.js';
 import { pump, queueInfo, firstStatus } from './scheduler.js';
 import { reviewInput } from './branches.js';
 import { gitIn, isGitRepo, repoRoot } from './git.js';
@@ -15,7 +15,7 @@ import { fail } from './util.js';
 // Chain stages pass chain_id / chain_stage, their stage settings as layers, and the developer's note.
 // plan_file (+ section): a plan kept in the repository, used as {{plan}} instead of a plan run.
 export function startRun(name, { input, plan_id, plan_file, section, context_runs = [], target_run, cwd,
-  session, overrides,
+  session, overrides, base, continue_run,
   chain_id, chain_stage, layers = [], note }) {
   let planRun = null;
   if (plan_id && plan_file) fail('pass plan_id or plan_file, not both');
@@ -64,19 +64,46 @@ export function startRun(name, { input, plan_id, plan_file, section, context_run
   let diff = null, readDir = dir;
   if (t.needs_diff) {
     if (s.access !== 'read') fail(`tentacle "${name}" uses {{diff}} and must have read access`);
-    const ri = reviewInput(target_run, dir);
+    const ri = reviewInput(target_run, dir, base);
     diff = ri.diff; readDir = ri.workdir; dir = ri.cwd;
     if (ri.planId && !contextRuns.some((r) => r.id === ri.planId)) {
       const pr = getRun(ri.planId); if (pr?.result) contextRuns.unshift(pr);
     }
   } else if (target_run) fail(`tentacle "${name}" does not take run_id (only tentacles using {{diff}})`);
+  else if (base) fail(`tentacle "${name}" does not take base (only tentacles using {{diff}})`);
+  // continue_run: a later stage on an earlier write run's branch, in a fresh agent session.
+  let prevRun = null;
+  if (continue_run) {
+    if (s.access !== 'write') fail(`tentacle "${name}" does not take continue_run (write tentacles only)`);
+    prevRun = getRun(continue_run);
+    if (!prevRun) fail(`no run with id ${continue_run}`);
+    if (prevRun.access !== 'write' || !prevRun.branch) {
+      fail(`${continue_run} is not a write run with a branch`);
+    }
+    if (IN_PROGRESS.includes(prevRun.status)) fail(`${continue_run} is still ${prevRun.status}`);
+    if (prevRun.outcome === 'merged' || prevRun.outcome === 'discarded') {
+      fail(`${continue_run} was already ${prevRun.outcome}; start a new execute instead`);
+    }
+    if (!existsSync(prevRun.workdir)) fail(`${continue_run}'s worktree is gone`);
+    const dirty = gitIn(prevRun.workdir, 'status', '--porcelain');
+    if (dirty) {
+      fail(`${continue_run}'s worktree has uncommitted changes; commit or resume it first:\n${dirty}`);
+    }
+    dir = prevRun.cwd;
+  }
   const task = input ?? targetRun?.task ?? planRun?.task ?? (planLabel && `Implement ${planLabel}`)
-    ?? (t.needs_diff ? 'Review the uncommitted changes in this repository.' : undefined);
+    ?? (t.needs_diff ? (base ? `Review the changes in this repository since ${base}.`
+      : 'Review the uncommitted changes in this repository.') : undefined);
   if (!task) fail('input is required');
 
   const id = newId(name.slice(0, 8));
   let workdir = readDir, branch = null, base_sha = null;
-  if (s.access === 'write') {
+  if (s.access === 'write' && prevRun) {
+    // Same branch and worktree, same base: a later review or merge covers every stage.
+    workdir = prevRun.workdir;
+    branch = prevRun.branch;
+    base_sha = prevRun.base_sha;
+  } else if (s.access === 'write') {
     if (!isGitRepo(dir)) fail(`${dir} is not a git repo; write tentacles work on a branch in a git worktree`);
     workdir = join(WORKTREES_DIR, id);
     branch = `kraken/${id}`;

@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `review(base)`: review every change in `cwd` since a commit, committed or not, so work done
+  directly in the checkout can be reviewed without a throwaway worktree.
+- `execute(..., continue_run)`: run the next plan section on an earlier execute run's branch and
+  worktree in a fresh agent session, with its own run id and label. Stage-by-stage work no longer
+  needs `resume` chains whose context keeps growing, nor a merge between stages.
+
 ## [2.3.0] - 2026-11-10
 
 ### Added
