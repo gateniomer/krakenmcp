@@ -1,7 +1,7 @@
 // Tentacles: named actions (plan, execute, or custom) with layered settings.
 // Tentacles are .md files: built-ins in src/tentacles/, the developer's own in ~/.kraken/tentacles/.
 // Resolution order, last wins: built-in -> user file -> chain stage -> call arguments
-// (agent/model/effort/verify only; a call can never set autonomy).
+// (agent/model/effort/verify/stage_verify only; a call can never set autonomy).
 // Only the developer changes settings, by editing files; MCP clients can override per call.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -18,7 +18,11 @@ export const FIELDS = {
   model: 'string|null',      // null = the agent's default model
   effort: 'string|null',
   prompt: 'string',          // template: {{task}} {{plan}} {{context}} {{diff}} {{workdir}} {{repo}}
-  verify: 'string|null',     // shell command Kraken runs after a write tentacle
+  verify: 'string|null',     // shell command Kraken runs after a write tentacle (once, at the end)
+  stage_verify: 'string|null', // cheaper command run after each stage of a staged run
+  verify_timeout_min: 'number', // limit for each verify / stage_verify / setup command
+  setup: 'string|null',      // shell command run once in a new worktree before the agent (e.g. npm ci)
+  stages: ['auto', 'off'],   // auto: a plan with 2+ "Stage" headings runs one fresh agent session per stage
   timeout_min: 'number',
   max_cost_usd: 'number|null', // stop the run when its cost passes this (agents that report cost)
   max_tokens: 'number|null',   // stop the run when input + output + reasoning tokens pass this
@@ -30,7 +34,8 @@ export const FIELDS = {
 // Defaults for every tentacle file; a custom tentacle must set at least `prompt`.
 const CUSTOM_BASE = {
   description: '', access: 'read', agent: 'opencode', model: null, effort: null,
-  verify: null, timeout_min: 30, max_cost_usd: null, max_tokens: null, autonomy: 'ask',
+  verify: null, stage_verify: null, verify_timeout_min: 10, setup: null, stages: 'auto',
+  timeout_min: 30, max_cost_usd: null, max_tokens: null, autonomy: 'ask',
 };
 
 // ---- tentacle files: <name>.md with a "---" settings header, then the prompt ----
@@ -144,6 +149,9 @@ export function validate(settings) {
     const type = spec.replace('|null', '');
     if (typeof v !== type) fail(`${k} must be a ${spec}`);
     if (k === 'timeout_min' && !(v > 0 && v <= 240)) fail('timeout_min must be between 0 and 240');
+    if (k === 'verify_timeout_min' && !(v > 0 && v <= 120)) {
+      fail('verify_timeout_min must be between 0 and 120');
+    }
     const isLimit = k === 'max_cost_usd' || k === 'max_tokens';
     if (isLimit && v !== null && !(v > 0)) fail(`${k} must be a positive number or null`);
   }

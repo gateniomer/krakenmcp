@@ -49,10 +49,10 @@ Any other MCP client that starts stdio servers works the same way.
 |---|---|
 | `think(problem, …)` | Escalate a hard reasoning problem: analysis, options, recommendation, open questions |
 | `plan(task, context_runs?, …)` | File-by-file implementation plan |
-| `execute(plan_id, verify?, …)` | Implement a plan on a `kraken/<run_id>` branch |
+| `execute(plan_id \| plan_file, section?, cwd?, verify?, stage_verify?, …)` | Implement a plan on a `kraken/<run_id>` branch. The plan is a finished plan run, or a Markdown file in the repo (`plan_file`, relative to `cwd`), optionally only the heading `section` names (the rest of the file is passed as context not to implement). See [Staged runs](#staged-runs) |
 | `review(run_id?, focus?, …)` | Review a run's branch (with its plan) or your uncommitted changes |
 | `explain(area, …)` | One-page map of how part of the codebase works |
-| `run(tentacle, input?, plan_id?, context_runs?, …)` | Run any tentacle, including your own |
+| `run(tentacle, input?, plan_id?, plan_file?, section?, context_runs?, …)` | Run any tentacle, including your own |
 | `chain(name?, task, verify?, max_fix_rounds?, context_runs?, cwd?, overrides?, session?)` | Run a chain of stages (default: plan -> execute -> review with fix rounds); pauses where a stage's autonomy is `ask` |
 | `status(run_id, wait_seconds?, full?, since?)` | Progress, result, metrics, verify result. Also takes a chain id. With `since`, returns the live `feed` (see below) |
 | `resume(run_id, input)` | Answer a `waiting` run's question, give a finished run a follow-up (same agent session and branch), or answer a paused chain |
@@ -162,13 +162,17 @@ at any time. Codex runs only show lifecycle lines.
 | `access` | `read` (cannot edit) or `write`. Enforced through agent flags plus a fixed preamble; a prompt cannot widen it |
 | `agent`, `model`, `effort` | Who runs it. Changing `agent` without a `model` resets the model to that agent's default |
 | `prompt` | Template with `{{task}}` `{{plan}}` `{{context}}` `{{diff}}` `{{workdir}}` `{{repo}}` |
-| `verify` | Command Kraken runs after a write tentacle; non-zero exit means `verify_failed` |
-| `timeout_min` | The agent and everything it started are stopped after this |
+| `verify` | Command Kraken runs after a write tentacle (once, at the end); non-zero exit means `verify_failed` |
+| `stage_verify` | Cheaper command run after each stage of a staged run, before the next one starts |
+| `verify_timeout_min` | Limit for each `setup`, `verify` and `stage_verify` command (default 10, max 120) |
+| `setup` | Command run once in a new worktree before the agent starts, e.g. `npm ci` or `pnpm install --frozen-lockfile`. A non-zero exit fails the run. Its output files must be gitignored, or they are committed |
+| `stages` | `auto` (default): a plan with 2+ `Stage` headings runs as a staged run. `off`: one agent session for the whole plan |
+| `timeout_min` | The agent and everything it started are stopped after this (for a staged run: all stages together). A write run that stops keeps its work as a WIP commit |
 | `max_cost_usd` | Stop the run (`over_budget`) once its cost passes this. Claude Code also gets `--max-budget-usd` |
 | `max_tokens` | Stop the run once input + output + reasoning tokens pass this |
 | `autonomy` | `ask` (default) or `auto`: the step after a successful run. `ask` = the head suggests it and waits; `auto` = the head or a chain takes it. The review tentacle's autonomy decides merging |
 
-A prompt using `{{plan}}` needs `plan_id`; one using `{{diff}}` gets a run's changes or your
+A prompt using `{{plan}}` needs `plan_id` or `plan_file`; one using `{{diff}}` gets a run's changes or your
 uncommitted changes; `context_runs` results go into `{{context}}` (or are appended).
 
 **Layers**, last wins:
@@ -176,7 +180,7 @@ uncommitted changes; `context_runs` results go into `{{context}}` (or are append
 1. built-in (`src/tentacles/<name>.md`)
 2. your tentacle files (`~/.kraken/tentacles/<name>.md`): a new tentacle, or just the fields to change
 3. a chain stage's own settings (source `chain <name>`), for that stage only
-4. the call's `agent` / `model` / `effort` (and `verify` for write runs); a call can never set `autonomy`
+4. the call's `agent` / `model` / `effort` (and `verify` / `stage_verify` for write runs); a call can never set `autonomy`
 
 `tentacles()` shows every value and which layer it came from.
 
@@ -284,3 +288,28 @@ Everything lives in `~/.kraken` (override with `KRAKEN_DATA`):
 - `chains/<name>.md`: your own chains and changes to the built-in ones
 - `logs/<run_id>.log`: full raw agent output (`krakenmcp show <run_id> --log`)
 - `worktrees/<run_id>/`: write runs' worktrees (removed by `merge`, `discard` or `prune --worktrees`)
+
+## Staged runs
+
+A write run whose plan has two or more `Stage` headings at the same level (`## Stage 1: …`,
+`### Stage 2b - …`; headings inside code blocks do not count) runs one fresh agent session per stage
+instead of one long session. Each stage gets the whole plan plus "do only stage N of M"; after it
+Kraken runs `stage_verify` (if set) and commits (`kraken(stage N/<agent>): …`). The last stage gets
+the full `verify` and the normal commit. Fresh sessions keep each agent's context small, so long
+plans run faster and a stop loses at most one stage.
+
+- `status` shows `stages: { done, total, current }` and the feed names each stage as it starts.
+- A failing stage check stops the run as `verify_failed` with that stage's work committed.
+- `resume(run_id, …)` first continues the old session (finishing the stage it stopped in), then runs
+  the stages that are left in fresh sessions. A conflict resolution (`update`) never continues stages.
+- The built-in `plan` tentacle writes plans in this format (Goal, Constraints, `## Stage N` with
+  Files / Where it goes / Check / Done when, Verify, Risks).
+
+**Stopped runs keep their work.** A write run that ends as `timeout`, `cancelled`, `over_budget` or
+`failed` commits what it changed as `kraken(wip <reason>/<agent>): …` (never during a conflict
+merge), so the branch can be reviewed, resumed or merged. A run waiting on a question still leaves
+its changes uncommitted for the resumed run.
+
+**Review input.** A diff over 80,000 characters is sent as whole files, smallest first, until the
+limit; the files left out are listed with the `git diff <base> -- <path>` command that shows each.
+

@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [2.3.0] - 2026-11-10
+
+### Added
+- `execute(plan_file, section?, cwd?)`: run a plan kept in the repository instead of a plan run, so
+  a project that writes its plans in git does not pay for a second plan run. `section` picks one
+  heading (case-insensitive substring); the rest of the file is passed as context not to implement.
+  `run()` takes `plan_file` and `section` too.
+- Staged runs: a plan with 2+ `Stage` headings runs one fresh agent session per stage, committing
+  after each (`kraken(stage N/…)`). Context stays small, so long plans run faster, and a stop loses
+  at most one stage. `resume` continues the stages that are left. `status` shows
+  `stages: { done, total, current }`. Tentacle setting `stages: off` turns it off.
+- `stage_verify` (setting and execute argument): a cheaper check after each stage; `verify` runs once
+  at the end. `verify_timeout_min` (default 10) limits each command (was a fixed 10 minutes).
+- `setup` setting: a command run once in a new worktree before the agent (e.g. installing
+  dependencies), instead of hiding it in `verify`.
+
+### Changed
+- A write run that stops (`timeout`, `cancelled`, `over_budget`, `failed`) commits its work as a
+  `kraken(wip <reason>/…)` commit, so the branch holds it for review, resume or merge. Before, the
+  work stayed uncommitted in the worktree.
+- The built-in `plan` prompt writes a fixed format: Goal, Constraints, `## Stage N` (Files, Where it
+  goes, Check, Done when), Verify, Risks; the `execute` prompt goes straight to the named code instead
+  of searching for it.
+- Review diffs over 80,000 characters are sent as whole files, smallest first, with the left-out
+  files listed with the command that shows each, instead of being cut in the middle of a file.
+- `diff_stat` of a run covers everything it changed across its stages.
+
 ## [2.2.0] - 2026-11-09
 
 ### Added

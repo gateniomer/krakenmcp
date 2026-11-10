@@ -1,5 +1,6 @@
 // Everything about a write run's kraken/<run_id> branch: merge, discard, update (merge the
 // developer's branch in), and the diff a review reads.
+import { capDiff } from './diff.js';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { db, IN_PROGRESS, getRun, addMessage, latestReview } from './store.js';
@@ -241,11 +242,8 @@ function resolveConflicts(run, { reply, into, sha, error, resolve, session }) {
 
 // ---- review input ----
 
-const MAX_DIFF = 80_000;
-const TRUNCATED = (n) => `\n…[diff truncated at ${MAX_DIFF} chars of ${n}; read the files for the rest]`;
-const capDiff = (d) => (d.length <= MAX_DIFF ? d : d.slice(0, MAX_DIFF) + TRUNCATED(d.length));
-const withUntracked = (diff, untracked) =>
-  capDiff(diff + (untracked ? `\n\nUntracked new files (read them):\n${untracked}` : ''));
+const withUntracked = (diff, untracked, base) =>
+  capDiff(diff, base) + (untracked ? `\n\nUntracked new files (read them):\n${untracked}` : '');
 
 // Diff for review: a Kraken run's changes (committed on its branch + anything uncommitted in its
 // worktree), or the uncommitted changes in `dir`.
@@ -254,7 +252,7 @@ export function reviewInput(targetId, dir) {
     const diff = gitIn(dir, 'diff', 'HEAD');
     const untracked = tryGit(dir, 'ls-files', '--others', '--exclude-standard');
     if (!diff && !untracked) fail(`no uncommitted changes in ${dir}; pass run_id to review a Kraken run`);
-    return { target: null, workdir: dir, cwd: dir, diff: withUntracked(diff, untracked) };
+    return { target: null, workdir: dir, cwd: dir, diff: withUntracked(diff, untracked, 'HEAD') };
   }
   const tr = mustRun(targetId);
   if (tr.access !== 'write') fail(`${targetId} is a read run; review a write run (e.g. execute)`);
@@ -267,6 +265,6 @@ export function reviewInput(targetId, dir) {
   const diff = gitIn(tr.workdir, 'diff', tr.base_sha ?? 'HEAD');
   const untracked = tryGit(tr.workdir, 'ls-files', '--others', '--exclude-standard');
   if (!diff && !untracked) fail(`${targetId} made no changes`);
-  const reviewDiff = withUntracked(diff, untracked);
+  const reviewDiff = withUntracked(diff, untracked, tr.base_sha ?? 'HEAD');
   return { target: tr, workdir: tr.workdir, cwd: tr.cwd, diff: reviewDiff, planId: tr.plan_id };
 }

@@ -76,7 +76,7 @@ export function resumeRun(id, input, { session, answering = false, syncBase, mer
     task: prev.task, agent: prev.agent, model: prev.model, effort: prev.effort,
     prompt: renderResumePrompt(prev.access, prev.workdir, text),
     config: { resumed_from: id, answering, limits: prevLimits(prev), sync_base: syncBase,
-      needs_diff: prevNeedsDiff(prev) || undefined },
+      needs_diff: prevNeedsDiff(prev) || undefined, ...carried(prev, merging) },
     timeout_min: prev.timeout_min, cwd: prev.cwd, workdir: prev.workdir, branch: prev.branch,
     verify_cmd: prev.verify_cmd, base_sha: prev.base_sha, resumed_from: id,
     native_session: prev.native_session,
@@ -97,4 +97,18 @@ export function resumeRun(id, input, { session, answering = false, syncBase, mer
 }
 
 const prevLimits = (run) => parseJson(run.config, {}).limits;
+// What a resumed run keeps from the run it continues: the stage progress (so it runs the stages that
+// are left), the stage prompt and the shell settings. A conflict merge never continues stages.
+function carried(run, merging) {
+  const c = parseJson(run.config, {});
+  const s = c.settings ?? {};
+  const settings = { stage_verify: s.stage_verify ?? undefined,
+    verify_timeout_min: s.verify_timeout_min ?? undefined };
+  return {
+    settings: c.settings ? settings : undefined,
+    plan_file: c.plan_file,
+    stages: merging ? undefined : c.stages,
+    stage_base_prompt: merging ? undefined : c.stage_base_prompt,
+  };
+}
 const prevNeedsDiff = (run) => !!parseJson(run.config, {}).needs_diff;

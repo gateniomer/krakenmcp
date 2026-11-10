@@ -5,16 +5,21 @@ import { resolveAgent, AGENTS } from './agents.js';
 import { WORKTREES_DIR, newId, insertRun, getRun } from './store.js';
 import { pump, queueInfo, firstStatus } from './scheduler.js';
 import { reviewInput } from './branches.js';
-import { gitIn, isGitRepo } from './git.js';
+import { gitIn, isGitRepo, repoRoot } from './git.js';
 import { resolveTentacle, renderPrompt, formatContext } from './tentacles.js';
+import { readPlanFile, splitStages } from './plans.js';
 import { startCard } from './feed.js';
 import { fail } from './util.js';
 
 // Create and start a run of any tentacle.
 // Chain stages pass chain_id / chain_stage, their stage settings as layers, and the developer's note.
-export function startRun(name, { input, plan_id, context_runs = [], target_run, cwd, session, overrides,
+// plan_file (+ section): a plan kept in the repository, used as {{plan}} instead of a plan run.
+export function startRun(name, { input, plan_id, plan_file, section, context_runs = [], target_run, cwd,
+  session, overrides,
   chain_id, chain_stage, layers = [], note }) {
   let planRun = null;
+  if (plan_id && plan_file) fail('pass plan_id or plan_file, not both');
+  if (section && !plan_file) fail('section needs plan_file');
   if (plan_id) {
     planRun = getRun(plan_id);
     if (!planRun) fail(`no run with id ${plan_id}`);
@@ -46,7 +51,14 @@ export function startRun(name, { input, plan_id, context_runs = [], target_run, 
     limits.max_tokens && !reports.tokens
       ? `${s.agent} does not report tokens, so max_tokens cannot be enforced` : null,
   ].filter(Boolean);
-  if (t.needs_plan && !planRun) fail(`tentacle "${name}" needs plan_id (its prompt uses {{plan}})`);
+  let planText = planRun?.result, stagedText = planRun?.result, planLabel = null;
+  if (plan_file) {
+    const pf = readPlanFile(repoRoot(dir), dir, plan_file, section);
+    planText = pf.plan; stagedText = pf.staged_text; planLabel = pf.label;
+  }
+  if (t.needs_plan && !planText) {
+    fail(`tentacle "${name}" needs plan_id or plan_file (its prompt uses {{plan}})`);
+  }
 
   // Tentacles whose prompt uses {{diff}} (review): the target run's changes, or uncommitted changes.
   let diff = null, readDir = dir;
@@ -58,7 +70,7 @@ export function startRun(name, { input, plan_id, context_runs = [], target_run, 
       const pr = getRun(ri.planId); if (pr?.result) contextRuns.unshift(pr);
     }
   } else if (target_run) fail(`tentacle "${name}" does not take run_id (only tentacles using {{diff}})`);
-  const task = input ?? targetRun?.task ?? planRun?.task
+  const task = input ?? targetRun?.task ?? planRun?.task ?? (planLabel && `Implement ${planLabel}`)
     ?? (t.needs_diff ? 'Review the uncommitted changes in this repository.' : undefined);
   if (!task) fail('input is required');
 
@@ -72,13 +84,17 @@ export function startRun(name, { input, plan_id, context_runs = [], target_run, 
     gitIn(dir, 'worktree', 'add', '-b', branch, workdir, base_sha);
   }
   const context = formatContext(contextRuns);
-  let prompt = renderPrompt(t, { task, plan: planRun?.result, context, diff, workdir, repo: t.repo });
+  let prompt = renderPrompt(t, { task, plan: planText, context, diff, workdir, repo: t.repo });
   if (note) prompt += `\n\nDeveloper note for this step: ${note}`;
+  // Staged runs: one fresh agent session per "Stage" heading of the plan (see worker.js).
+  const stages = s.access === 'write' && t.needs_plan && s.stages !== 'off' ? splitStages(stagedText) : [];
   insertRun({
     id, session, tentacle: name, access: s.access, plan_id: planRun?.id, task, agent: s.agent, model: s.model,
     effort: s.effort, prompt,
     config: { settings: { ...s, prompt: undefined }, sources: t.sources,
-      context_runs: contextRuns.map((r) => r.id), limits, needs_diff: t.needs_diff || undefined },
+      context_runs: contextRuns.map((r) => r.id), limits, needs_diff: t.needs_diff || undefined,
+      plan_file: planLabel ?? undefined,
+      stages: stages.length ? { titles: stages.map((x) => x.title), next: 0 } : undefined },
     timeout_min: s.timeout_min, cwd: dir, workdir, branch, verify_cmd: s.access === 'write' ? s.verify : null,
     base_sha, target_run: targetRun?.id, chain_id, chain_stage,
   });
@@ -88,6 +104,8 @@ export function startRun(name, { input, plan_id, context_runs = [], target_run, 
     run_id: id, tentacle: name, status: getRun(id).status, queue: queueInfo(id),
     agent: s.agent, model: s.model, effort: s.effort ?? undefined,
     workdir, branch: branch ?? undefined, verify: s.access === 'write' ? s.verify ?? undefined : undefined,
+    plan_file: planLabel ?? undefined,
+    stages: stages.length ? stages.map((x) => x.title) : undefined,
     next: firstStatus(id),
     limits: limits.max_cost_usd || limits.max_tokens ? limits : undefined,
     warnings: warnings.length ? warnings : undefined,

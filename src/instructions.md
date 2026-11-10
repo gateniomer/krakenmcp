@@ -22,7 +22,8 @@ Usual order (not a script): discuss the feature with the developer yourself; you
 think only for hard logic (multi-system changes, state/timing/concurrency/networking/persistence, correctness
 arguments, or after a failed attempt), never for simple edits: it is slow and expensive; relay its recommendation in
 your own words and ask its open questions. Then plan(task + the developer's answers, context_runs: [think run_id]),
-execute(plan_id) (on branch kraken/<run_id> in a separate worktree), review(run_id) (VERDICT: approve |
+execute(plan_id) (on branch kraken/<run_id> in a separate worktree; when the plan already exists as a file
+in the repo, execute(plan_file, section?) instead, which skips the plan run), review(run_id) (VERDICT: approve |
 changes_requested), then merge. To fix things on the same branch use resume(run_id, instruction).
 merge(run_id) returns a preview. Show it to the developer and call merge(run_id, confirm) only after
 they explicitly approve. If merge reports auto: true it already landed (the review tentacle's autonomy is auto); tell the developer.

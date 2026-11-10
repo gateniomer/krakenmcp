@@ -58,11 +58,21 @@ server.tool('plan', {
 }, async (a) => start('plan', a, { input: a.task }));
 
 server.tool('execute', {
-  description: 'Implement a finished plan on branch kraken/<run_id> in a separate worktree.',
-  input: { plan_id: RUN_ID, ...OVERRIDES,
-    verify: str({ description: 'Command to run after, e.g. "npm test"' }), session: SESSION },
-}, async ({ plan_id, verify, session, ...a }) =>
-  attempt(() => startRun('execute', { plan_id, session, overrides: { ...overridesOf(a), verify } })));
+  description: 'Implement a plan on branch kraken/<run_id> in a separate worktree. The plan is a finished ' +
+    'plan run (plan_id) or a Markdown file in the repo (plan_file, optionally one section of it). A plan ' +
+    'with 2+ "Stage" headings runs one fresh agent session per stage, committing after each.',
+  input: { plan_id: str({ description: 'A finished plan run' }),
+    plan_file: str({ description: 'Plan file, relative to cwd (instead of plan_id)' }),
+    section: str({ description: 'Only this heading of plan_file (case-insensitive substring)' }),
+    cwd: CWD, ...OVERRIDES,
+    verify: str({ description: 'Command to run once at the end, e.g. "npm test"' }),
+    stage_verify: str({ description: 'Cheaper command to run after each stage' }), session: SESSION },
+}, async ({ plan_id, plan_file, section, cwd, verify, stage_verify, session, ...a }) =>
+  attempt(() => {
+    if (!plan_id && !plan_file) throw new Error('pass plan_id or plan_file');
+    return startRun('execute', { plan_id, plan_file, section, cwd, session,
+      overrides: { ...overridesOf(a), verify, stage_verify } });
+  }));
 
 server.tool('review', {
   description: 'Review a run\'s branch (with its plan), or uncommitted changes when run_id is omitted. ' +
@@ -78,9 +88,10 @@ server.tool('explain', {
 
 server.tool('run', {
   description: 'Run any tentacle by name, including custom ones.',
-  input: { tentacle: str({ required: true }), input: str(), plan_id: str(),
+  input: { tentacle: str({ required: true }), input: str(), plan_id: str(), plan_file: str(), section: str(),
     context_runs: CONTEXT_RUNS, cwd: CWD, ...OVERRIDES, session: SESSION },
-}, async (a) => start(a.tentacle, a, { input: a.input, plan_id: a.plan_id }));
+}, async (a) => start(a.tentacle, a,
+  { input: a.input, plan_id: a.plan_id, plan_file: a.plan_file, section: a.section }));
 
 server.tool('chain', {
   description: 'Run a chain of tentacle stages (default: plan -> execute -> review, with fix rounds). ' +

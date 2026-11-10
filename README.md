@@ -49,6 +49,12 @@ Out of the box:
 | `explain` | One-page map of part of the codebase | OpenCode |
 | `research` | Searches the web, cites sources | Claude Code + Sonnet |
 
+**Long plans run in stages.** A plan with `## Stage 1`, `## Stage 2`, … headings (the format the
+`plan` tentacle writes) runs one fresh agent session per stage and commits after each, so the cheap
+model's context stays small and a stop loses at most one stage. Keep plans in your repo? Run them
+directly with `execute(plan_file: "docs/plan.md", section: "Part a")`, no plan run needed.
+Details: [Staged runs](docs/reference.md#staged-runs).
+
 Add your own with `krakenmcp edit <name>`: it creates `~/.kraken/tentacles/<name>.md`, a short
 settings header and a prompt, and the head can use it right away:
 

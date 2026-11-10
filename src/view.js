@@ -119,14 +119,24 @@ export function nextOf(run) {
   return { next: finishedNext(f), autonomy: f.autonomy };
 }
 
+// A staged run's progress: { done, total, current }, from config.stages (next = first stage not done).
+export function stageProgress(run) {
+  const st = parse(run.config)?.stages;
+  if (!st?.titles?.length) return undefined;
+  const total = st.titles.length, done = Math.min(st.next, total);
+  return { done, total, current: done < total ? st.titles[done] : undefined };
+}
+
 export function describe(run, full = false) {
+  const cfg = parse(run.config) ?? {};
   const resultFile = join(PLANS_DIR, `${run.id}.md`);
   const verifyOutput = full ? run.verify_output : clip(run.verify_output, 600);
   return {
     id: run.id, tentacle: run.tentacle, access: run.access, status: run.status,
     queue: queueInfo(run.id),
     agent: run.agent, model: run.model, effort: run.effort,
-    task: clip(run.task, 200), plan_id: run.plan_id ?? undefined,
+    task: clip(run.task, 200), plan_id: run.plan_id ?? undefined, plan_file: cfg.plan_file ?? undefined,
+    stages: stageProgress(run),
     question: run.status === 'waiting' ? run.question : undefined,
     ...nextOf(run),
     outcome: run.outcome ? `${run.outcome}: ${run.outcome_detail}` : undefined,
@@ -140,7 +150,9 @@ export function describe(run, full = false) {
     stopped: run.stop_reason ?? undefined,
     chain: run.chain_id ?? undefined,
     metrics: metrics(run),
-    verify: run.verify_cmd ? { cmd: run.verify_cmd, exit: run.verify_exit, output: verifyOutput } : undefined,
+    verify: run.verify_cmd || run.verify_exit != null
+      ? { cmd: run.verify_cmd ?? cfg.settings?.stage_verify, exit: run.verify_exit, output: verifyOutput }
+      : undefined,
     log: join(LOGS_DIR, `${run.id}.log`),
     recent_messages: recentMessages(run.id),
     cursor: lastMessageId(run.id),
